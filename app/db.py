@@ -210,3 +210,4 @@ def set_invite_token(db: Database, token: str) -> None:
         """,
         ["invite_token", token],
     )
+    db.conn.commit()

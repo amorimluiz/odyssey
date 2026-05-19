@@ -18,6 +18,7 @@ Keep only durable, cross-task context here. Do not duplicate facts that are obvi
 - Tests that modify env vars must clear `get_settings()` cache to avoid cross-test pollution.
 - In this repository/runtime, `sqlite-utils` `table.insert(...)` returns a table handle rather than row id; callers needing inserted ids should query `SELECT last_insert_rowid()` on the same DB connection.
 - In FastHTML `after` hooks, `resp` may be an FT tuple before response conversion; status logging must handle non-`Response` return types.
+- `app.db.set_invite_token()` must commit the upsert (`db.conn.commit()`) so invite-token changes are visible across separate request-scoped DB connections (critical for `/invite` and token rotation flows).
 
 ## Open Risks
 - Local environment may not support `venv` creation (`ensurepip` missing); verification may require user-level installs with `--break-system-packages` unless environment tooling changes.
