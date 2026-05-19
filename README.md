@@ -8,7 +8,7 @@ Paste a listing URL, the app scrapes the title, photo, and price automatically, 
 
 ## Features
 
-- **Invite-only registration** — admin generates a single-use invite link; anyone with it can create an account
+- **Bootstrap setup + invite-only registration** — the first user creates the initial admin at `/setup`; after that, admin generates a single-use invite link and anyone with it can create an account
 - **Airbnb & Booking.com scraping** — Open Graph metadata (title, image, description, price) fetched on submission; URLs are normalised and deduplicated
 - **Toggle voting** — one click to cast or retract a vote per listing
 - **Ranked list** — houses sorted live by vote count
@@ -90,9 +90,9 @@ open htmlcov/index.html
 ## How to Use
 
 1. Start the server and open `http://localhost:8000`.
-2. The first registered user becomes admin automatically (or the email matching `ADMIN_EMAIL`).
-3. As admin, go to `/admin` to copy the invite link and share it with your group.
-4. Everyone registers via the invite link and lands on the voting page.
+2. On a fresh database, open `/setup` to create the first admin account.
+3. After logging in as admin, go to `/admin` to copy the invite link and share it with your group.
+4. Everyone else registers via the invite link and lands on the voting page.
 5. Paste any Airbnb (`airbnb.com/rooms/<id>`) or Booking.com (`booking.com/hotel/...`) URL into the form.
 6. Click the vote button on any listing to cast or retract your vote.
 7. The house with the most votes floats to the top — that's your pick.
