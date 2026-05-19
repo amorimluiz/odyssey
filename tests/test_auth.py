@@ -33,6 +33,13 @@ def test_hash_and_verify_password_round_trip() -> None:
     assert verify_password("plain-secret", hashed) is True
 
 
+def test_hash_and_verify_password_round_trip_for_long_password() -> None:
+    plain = "x" * 100
+    hashed = hash_password(plain)
+
+    assert verify_password(plain, hashed) is True
+
+
 def test_verify_password_rejects_different_plaintext() -> None:
     hashed = hash_password("plain-secret")
     assert verify_password("different-secret", hashed) is False

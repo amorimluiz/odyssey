@@ -176,6 +176,20 @@ def test_register_persists_slugified_username_and_redirects(monkeypatch, tmp_pat
     assert row["username"] == "alice"
 
 
+def test_register_accepts_long_passwords(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        _seed_invite("invite-ok")
+
+        response = client.post(
+            "/register",
+            data={"name": "Alice", "username": "alice", "password": "x" * 100, "token": "invite-ok"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
+
+
 def test_register_without_token_bootstraps_first_admin_and_seeds_invite(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
         db = get_db()
