@@ -77,6 +77,47 @@ def test_get_invite_valid_does_not_render_alert(monkeypatch, tmp_path) -> None:
     assert soup.find(attrs={"role": "alert"}) is None
 
 
+# --- /setup route tests ---
+
+def test_get_setup_renders_first_admin_form_when_no_users(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        db = get_db()
+        init_schema(db)
+
+        response = client.get("/setup")
+
+    assert response.status_code == 200
+    _assert_html_response(response)
+    assert "Create the first admin account." in response.text
+    soup = BeautifulSoup(response.text, "html.parser")
+    assert soup.find("form", {"action": "/register"}) is not None
+    assert soup.find("input", {"name": "token"}) is None
+
+
+def test_get_setup_redirects_after_users_exist(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        db = get_db()
+        init_schema(db)
+        insert_user(db, name="Existing", username="existing", password_hash=hash_password("existingpass"), role="admin")
+
+        response = client.get("/setup", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+
+def test_login_page_shows_setup_hint_when_db_is_empty(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        db = get_db()
+        init_schema(db)
+
+        response = client.get("/login")
+
+    assert response.status_code == 200
+    _assert_html_response(response)
+    assert "/setup" in response.text
+
+
 # --- /username-preview route tests ---
 
 def test_username_preview_plain_ascii(monkeypatch, tmp_path) -> None:
@@ -133,6 +174,42 @@ def test_register_persists_slugified_username_and_redirects(monkeypatch, tmp_pat
     db = get_db()
     row = list(db.query("SELECT username FROM users LIMIT 1"))[0]
     assert row["username"] == "alice"
+
+
+def test_register_without_token_bootstraps_first_admin_and_seeds_invite(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        db = get_db()
+        init_schema(db)
+
+        response = client.post(
+            "/register",
+            data={"name": "First", "username": "first-user", "password": "supersecure"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
+    assert "session=" in response.headers["set-cookie"].lower()
+    db = get_db()
+    user = list(db.query("SELECT role FROM users LIMIT 1"))[0]
+    assert user["role"] == "admin"
+    assert get_invite_token(db)
+
+
+def test_register_without_token_after_bootstrap_is_rejected(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        db = get_db()
+        init_schema(db)
+        insert_user(db, name="Existing", username="existing", password_hash=hash_password("existingpass"), role="admin")
+
+        response = client.post(
+            "/register",
+            data={"name": "Second", "username": "second-user", "password": "supersecure"},
+        )
+
+    assert response.status_code == 403
+    _assert_html_response(response)
+    assert db["users"].count == 1
 
 
 def test_register_edited_username_overrides_slug(monkeypatch, tmp_path) -> None:
