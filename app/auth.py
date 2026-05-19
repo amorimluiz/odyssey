@@ -34,7 +34,7 @@ def issue_token(user_id: int, role: str) -> str:
     """Issue an HS256 JWT with 30-day expiration."""
     settings = get_settings()
     expires_at = datetime.now(tz=timezone.utc) + timedelta(days=30)
-    payload = {"sub": user_id, "role": role, "exp": expires_at}
+    payload = {"sub": str(user_id), "role": role, "exp": expires_at}
     return jwt.encode(payload, settings.secret_key, algorithm="HS256")
 
 

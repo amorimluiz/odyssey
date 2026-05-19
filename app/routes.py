@@ -9,7 +9,7 @@ from typing import Protocol
 
 from fasthtml.common import Button, Div, FastHTML, Form, Input, Label, P
 from starlette.requests import Request
-from starlette.responses import RedirectResponse, Response
+from starlette.responses import HTMLResponse, RedirectResponse, Response
 
 from app.auth import clear_session_cookie, current_user, hash_password, issue_token, require_admin, require_user, set_session_cookie, verify_password
 from app.components import admin_panel, base_layout, error_fragment, house_card, house_submit_form, invite_link_fragment, vote_button
@@ -29,22 +29,27 @@ class RoutesRegistrar(Protocol):
 def register_routes(app: FastHTML) -> None:
     """Register task-specific business routes on the provided app instance."""
 
+    def _html_response(body, request: Request, *, title: str, status_code: int = 200) -> HTMLResponse:
+        return HTMLResponse(content=str(base_layout(body, request=request, title=title)), status_code=status_code)
+
     def _register_form(token: str, *, disabled: bool, error_message: str | None = None) -> Div:
         error_node = error_fragment(error_message) if error_message else None
         return Div(
             error_node,
             Form(
-                Label("Name", fr="name"),
-                Input(id="name", name="name", type="text", required=True, disabled=disabled),
-                Label("Email", fr="email"),
-                Input(id="email", name="email", type="email", required=True, disabled=disabled),
-                Label("Password", fr="password"),
-                Input(id="password", name="password", type="password", required=True, disabled=disabled),
+                Label("Name", fr="name", cls="form-label"),
+                Input(id="name", name="name", type="text", required=True, disabled=disabled, cls="text-input"),
+                Label("Email", fr="email", cls="form-label"),
+                Input(id="email", name="email", type="email", required=True, disabled=disabled, cls="text-input"),
+                Label("Password", fr="password", cls="form-label"),
+                Input(id="password", name="password", type="password", required=True, disabled=disabled, cls="text-input"),
                 Input(name="token", type="hidden", value=token),
-                Button("Create account", type="submit", disabled=disabled),
+                Button("Create account", type="submit", disabled=disabled, cls="btn btn-primary"),
                 method="post",
                 action="/register",
+                cls="auth-form",
             ),
+            cls="auth-panel",
         )
 
     def _login_form(*, error_message: str | None = None) -> Div:
@@ -52,14 +57,16 @@ def register_routes(app: FastHTML) -> None:
         return Div(
             error_node,
             Form(
-                Label("Email", fr="email"),
-                Input(id="email", name="email", type="email", required=True),
-                Label("Password", fr="password"),
-                Input(id="password", name="password", type="password", required=True),
-                Button("Login", type="submit"),
+                Label("Email", fr="email", cls="form-label"),
+                Input(id="email", name="email", type="email", required=True, cls="text-input"),
+                Label("Password", fr="password", cls="form-label"),
+                Input(id="password", name="password", type="password", required=True, cls="text-input"),
+                Button("Login", type="submit", cls="btn btn-primary"),
                 method="post",
                 action="/login",
+                cls="auth-form",
             ),
+            cls="auth-panel",
         )
 
     @app.get("/invite/{token}")
@@ -67,9 +74,17 @@ def register_routes(app: FastHTML) -> None:
         db = get_db()
         stored_token = get_invite_token(db) or ""
         token_ok = bool(stored_token) and compare_digest(stored_token, token)
-        body = _register_form(token, disabled=not token_ok)
+        body = _register_form(
+            token,
+            disabled=not token_ok,
+            error_message=(
+                "This invite link is invalid or has been rotated. Ask your organizer for a new one."
+                if not token_ok
+                else None
+            ),
+        )
         status_code = 200 if token_ok else 403
-        return Response(content=str(base_layout(body, request=request, title="Register")), status_code=status_code)
+        return _html_response(body, request, title="Register", status_code=status_code)
 
     @app.post("/register")
     async def register(request: Request):
@@ -84,15 +99,15 @@ def register_routes(app: FastHTML) -> None:
         token_ok = bool(stored_token) and compare_digest(stored_token, token)
         if not token_ok:
             body = _register_form(token, disabled=True)
-            return Response(content=str(base_layout(body, request=request, title="Register")), status_code=403)
+            return _html_response(body, request, title="Register", status_code=403)
 
         if len(password) < 8:
             body = _register_form(token, disabled=False, error_message="Password must be at least 8 characters.")
-            return Response(content=str(base_layout(body, request=request, title="Register")), status_code=422)
+            return _html_response(body, request, title="Register", status_code=422)
 
         if get_user_by_email(db, email) is not None:
             body = _register_form(token, disabled=False, error_message="Email is already registered.")
-            return Response(content=str(base_layout(body, request=request, title="Register")), status_code=409)
+            return _html_response(body, request, title="Register", status_code=409)
 
         settings = get_settings()
         if settings.admin_email and settings.admin_email.strip().lower() == email:
@@ -115,7 +130,7 @@ def register_routes(app: FastHTML) -> None:
 
     @app.get("/login")
     async def login_page(request: Request):
-        return base_layout(_login_form(), request=request, title="Login")
+        return _html_response(_login_form(), request, title="Login")
 
     @app.post("/login")
     async def login(request: Request):
@@ -126,10 +141,7 @@ def register_routes(app: FastHTML) -> None:
 
         generic_error = "Invalid email or password."
         if user is None or not verify_password(password, str(user.get("password_hash", ""))):
-            return Response(
-                content=str(base_layout(_login_form(error_message=generic_error), request=request, title="Login")),
-                status_code=401,
-            )
+            return _html_response(_login_form(error_message=generic_error), request, title="Login", status_code=401)
 
         response = RedirectResponse(url="/", status_code=303)
         set_session_cookie(response, issue_token(int(user["id"]), str(user["role"])))
@@ -153,11 +165,11 @@ def register_routes(app: FastHTML) -> None:
         if houses:
             list_content = [house_card(house, is_voted=int(house["id"]) in voted_ids) for house in houses]
         else:
-            list_content = [P("Paste an Airbnb or Booking URL above to get started")]
+            list_content = [P("Paste an Airbnb or Booking URL above to get started", cls="house-list-empty")]
 
         return base_layout(
             house_submit_form(),
-            Div(*list_content, id="house-list"),
+            Div(*list_content, id="house-list", cls="house-list"),
             request=request,
             title="Group House Voting",
         )
@@ -173,7 +185,7 @@ def register_routes(app: FastHTML) -> None:
         parsed = scraper.parse_url(raw_url)
         if parsed is None:
             logger.info("scraper outcome=parse_fail url=%s", raw_url)
-            return Response(
+            return HTMLResponse(
                 content=str(error_fragment("Only Airbnb and Booking URLs are supported.")),
                 status_code=422,
             )
@@ -194,7 +206,7 @@ def register_routes(app: FastHTML) -> None:
                 fetch_meta.get("status", "unknown"),
                 fetch_meta.get("elapsed_ms", 0),
             )
-            return Response(
+            return HTMLResponse(
                 content=str(error_fragment("Could not fetch listing metadata.", retryable=True)),
                 status_code=502,
             )
