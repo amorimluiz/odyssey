@@ -8,11 +8,13 @@ from sqlite_utils import Database
 from app.db import (
     get_house_by_external_id,
     get_invite_token,
+    get_user_by_username,
     houses_ranked,
     init_schema,
     insert_house,
     insert_user,
     set_invite_token,
+    slugify,
     toggle_vote,
 )
 from app.errors import DuplicateHouseError
@@ -30,7 +32,7 @@ def test_init_schema_creates_tables_and_is_idempotent() -> None:
 
 
 def _seed_user_house(db: Database) -> tuple[int, int]:
-    user_id = insert_user(db, name="A", email="a@example.com", password_hash="hash")
+    user_id = insert_user(db, name="A", username="user-a", password_hash="hash")
     house_id = insert_house(
         db,
         source="airbnb",
@@ -69,13 +71,13 @@ def test_votes_composite_primary_key_enforced() -> None:
         db["votes"].insert({"user_id": user_id, "house_id": house_id, "voted_at": "2026-01-01T00:00:01+00:00"})
 
 
-def test_user_email_uniqueness_case_insensitive_storage() -> None:
+def test_user_username_uniqueness() -> None:
     db = Database(memory=True)
     init_schema(db)
 
-    insert_user(db, name="User", email="Foo@x.com", password_hash="hash")
+    insert_user(db, name="User", username="alice", password_hash="hash")
     with pytest.raises(sqlite3.IntegrityError):
-        insert_user(db, name="User 2", email="foo@x.com", password_hash="hash")
+        insert_user(db, name="User 2", username="alice", password_hash="hash")
 
 
 def test_toggle_vote_insert_then_delete() -> None:
@@ -91,8 +93,8 @@ def test_houses_ranked_sort_and_zero_votes() -> None:
     db = Database(memory=True)
     init_schema(db)
 
-    user1 = insert_user(db, name="U1", email="u1@example.com", password_hash="hash")
-    user2 = insert_user(db, name="U2", email="u2@example.com", password_hash="hash")
+    user1 = insert_user(db, name="U1", username="u1", password_hash="hash")
+    user2 = insert_user(db, name="U2", username="u2", password_hash="hash")
 
     h1 = insert_house(
         db,
@@ -152,7 +154,7 @@ def test_file_backed_persistence_and_constraints(tmp_path) -> None:
 
     db1 = Database(str(db_path))
     init_schema(db1)
-    uid = insert_user(db1, name="Persist", email="persist@example.com", password_hash="hash")
+    uid = insert_user(db1, name="Persist", username="persist-user", password_hash="hash")
     hid = insert_house(
         db1,
         source="airbnb",
@@ -208,3 +210,94 @@ def test_get_db_file_backed_reports_wal(monkeypatch, tmp_path) -> None:
     db = get_db()
     mode = list(db.query("PRAGMA journal_mode"))[0]["journal_mode"]
     assert str(mode).lower() == "wal"
+
+
+# --- slugify unit tests ---
+
+def test_slugify_accented_characters() -> None:
+    assert slugify("João Silva") == "joao-silva"
+
+
+def test_slugify_leading_trailing_whitespace() -> None:
+    assert slugify("  hello  ") == "hello"
+
+
+def test_slugify_consecutive_whitespace_collapses() -> None:
+    assert slugify("A  B") == "a-b"
+
+
+def test_slugify_diacritics_and_punctuation() -> None:
+    assert slugify("Ça va?") == "ca-va"
+
+
+def test_slugify_empty_string() -> None:
+    assert slugify("") == ""
+
+
+def test_slugify_idempotent() -> None:
+    assert slugify("already-slug") == "already-slug"
+
+
+def test_slugify_underscore_normalization() -> None:
+    assert slugify("under_score") == "under-score"
+
+
+# --- get_user_by_username tests ---
+
+def test_get_user_by_username_exact_match() -> None:
+    db = Database(memory=True)
+    init_schema(db)
+    insert_user(db, name="Alice", username="alice", password_hash="hash")
+
+    result = get_user_by_username(db, "alice")
+    assert result is not None
+    assert result["username"] == "alice"
+
+
+def test_get_user_by_username_case_insensitive() -> None:
+    db = Database(memory=True)
+    init_schema(db)
+    insert_user(db, name="Alice", username="alice", password_hash="hash")
+
+    result = get_user_by_username(db, "ALICE")
+    assert result is not None
+    assert result["username"] == "alice"
+
+
+def test_get_user_by_username_unknown_returns_none() -> None:
+    db = Database(memory=True)
+    init_schema(db)
+
+    assert get_user_by_username(db, "ghost") is None
+
+
+# --- insert_user lowercase persistence tests ---
+
+def test_insert_user_persists_lowercase_username() -> None:
+    db = Database(memory=True)
+    init_schema(db)
+
+    insert_user(db, name="João Silva", username="JoaoSilva", password_hash="hash")
+
+    row = list(db.query("SELECT username FROM users LIMIT 1"))[0]
+    assert row["username"] == "joaosilva"
+
+
+def test_insert_user_lowercase_is_retrievable_by_original_casing() -> None:
+    db = Database(memory=True)
+    init_schema(db)
+
+    insert_user(db, name="João Silva", username="JoaoSilva", password_hash="hash")
+
+    result = get_user_by_username(db, "JoaoSilva")
+    assert result is not None
+    assert result["username"] == "joaosilva"
+
+
+def test_insert_user_duplicate_username_raises_integrity_error() -> None:
+    db = Database(memory=True)
+    init_schema(db)
+
+    insert_user(db, name="Alice", username="alice", password_hash="hash")
+    with pytest.raises(sqlite3.IntegrityError):
+        insert_user(db, name="Alice 2", username="alice", password_hash="hash2")

@@ -83,6 +83,25 @@ body.app-body {
   font-weight: 700;
 }
 
+.nav-logout-form {
+  display: inline-flex;
+  margin: 0;
+}
+
+.nav-logout-button {
+  background: transparent;
+  border: 0;
+  color: var(--color-ink-deep);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 0;
+}
+
+.nav-logout-button:hover {
+  text-decoration: underline;
+}
+
 .page-title {
   margin: 0 0 var(--space-lg);
   color: var(--color-ink-deep);

@@ -46,6 +46,10 @@ def test_nav_header_admin_variant(monkeypatch) -> None:
     assert "Admin" in html
     assert "Logout" in html
     assert "Login" not in html
+    assert 'href="/logout"' not in html
+    assert 'method="post"' in html
+    assert 'action="/logout"' in html
+    assert '<form' in html
 
 
 def test_error_fragment_retryable_variant() -> None:
@@ -115,20 +119,6 @@ def test_startup_calls_init_schema_once(monkeypatch, tmp_path) -> None:
 
     assert calls["count"] == 1
 
-
-def test_invalid_admin_email_emits_warning(monkeypatch, caplog, tmp_path) -> None:
-    monkeypatch.setenv("SECRET_KEY", "s" * 32)
-    monkeypatch.setenv("DB_PATH", str(tmp_path / "app.db"))
-    monkeypatch.setenv("ADMIN_EMAIL", "not-an-email")
-
-    import main
-
-    importlib.reload(main)
-    caplog.set_level(logging.WARNING)
-    with TestClient(main.create_app()):
-        pass
-
-    assert "ADMIN_EMAIL appears invalid" in caplog.text
 
 
 def test_startup_is_idempotent_for_same_db_path(monkeypatch, tmp_path) -> None:

@@ -9,13 +9,9 @@ from app.auth import hash_password
 from app.db import get_db, get_invite_token, init_schema, insert_user, set_invite_token
 
 
-def _build_client(monkeypatch, tmp_path, *, admin_email: str | None = None) -> TestClient:
+def _build_client(monkeypatch, tmp_path) -> TestClient:
     monkeypatch.setenv("SECRET_KEY", "s" * 32)
     monkeypatch.setenv("DB_PATH", str(tmp_path / "app.db"))
-    if admin_email is None:
-        monkeypatch.delenv("ADMIN_EMAIL", raising=False)
-    else:
-        monkeypatch.setenv("ADMIN_EMAIL", admin_email)
     import main
 
     importlib.reload(main)
@@ -31,6 +27,8 @@ def _seed_invite(token: str) -> None:
 def _assert_html_response(response) -> None:
     assert response.headers["content-type"].startswith("text/html")
 
+
+# --- /invite route tests ---
 
 def test_get_invite_valid_returns_form(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
@@ -79,28 +77,78 @@ def test_get_invite_valid_does_not_render_alert(monkeypatch, tmp_path) -> None:
     assert soup.find(attrs={"role": "alert"}) is None
 
 
-def test_register_lowercases_email_and_sets_session_cookie(monkeypatch, tmp_path) -> None:
+# --- /username-preview route tests ---
+
+def test_username_preview_plain_ascii(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        response = client.get("/username-preview", params={"name": "Alice"})
+
+    assert response.status_code == 200
+    assert 'id="username"' in response.text
+    assert 'value="alice"' in response.text
+
+
+def test_username_preview_accented_name(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        response = client.get("/username-preview", params={"name": "João Silva"})
+
+    assert response.status_code == 200
+    assert 'id="username"' in response.text
+    assert 'value="joao-silva"' in response.text
+
+
+def test_username_preview_special_characters(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        response = client.get("/username-preview", params={"name": "Ça va?"})
+
+    assert response.status_code == 200
+    assert 'id="username"' in response.text
+    assert 'value="ca-va"' in response.text
+
+
+def test_username_preview_empty_name(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        response = client.get("/username-preview", params={"name": ""})
+
+    assert response.status_code == 200
+    assert 'id="username"' in response.text
+    assert 'value=""' in response.text
+
+
+# --- /register route tests ---
+
+def test_register_persists_slugified_username_and_redirects(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
         _seed_invite("invite-ok")
 
         response = client.post(
             "/register",
-            data={
-                "name": "Alice",
-                "email": "ALICE@EXAMPLE.COM",
-                "password": "supersecure",
-                "token": "invite-ok",
-            },
+            data={"name": "Alice", "username": "alice", "password": "supersecure", "token": "invite-ok"},
             follow_redirects=False,
         )
 
     assert response.status_code == 303
     assert response.headers["location"] == "/"
     assert "session=" in response.headers["set-cookie"].lower()
-
     db = get_db()
-    row = list(db.query("SELECT email FROM users LIMIT 1"))[0]
-    assert row["email"] == "alice@example.com"
+    row = list(db.query("SELECT username FROM users LIMIT 1"))[0]
+    assert row["username"] == "alice"
+
+
+def test_register_edited_username_overrides_slug(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        _seed_invite("invite-ok")
+
+        response = client.post(
+            "/register",
+            data={"name": "Alice", "username": "custom-name", "password": "supersecure", "token": "invite-ok"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    db = get_db()
+    row = list(db.query("SELECT username FROM users LIMIT 1"))[0]
+    assert row["username"] == "custom-name"
 
 
 def test_register_cookie_round_trip_reaches_home(monkeypatch, tmp_path) -> None:
@@ -109,12 +157,7 @@ def test_register_cookie_round_trip_reaches_home(monkeypatch, tmp_path) -> None:
 
         register_response = client.post(
             "/register",
-            data={
-                "name": "Alice",
-                "email": "alice@example.com",
-                "password": "supersecure",
-                "token": "invite-ok",
-            },
+            data={"name": "Alice", "username": "alice", "password": "supersecure", "token": "invite-ok"},
             follow_redirects=False,
         )
         session_cookie = register_response.cookies.get("session")
@@ -135,7 +178,7 @@ def test_register_short_password_rejected_without_insert(monkeypatch, tmp_path) 
 
         response = client.post(
             "/register",
-            data={"name": "Bob", "email": "bob@example.com", "password": "short", "token": "invite-ok"},
+            data={"name": "Bob", "username": "bob", "password": "short", "token": "invite-ok"},
         )
 
     assert response.status_code == 422
@@ -145,26 +188,62 @@ def test_register_short_password_rejected_without_insert(monkeypatch, tmp_path) 
     assert db["users"].count == 0
 
 
-def test_register_admin_email_gets_admin_role(monkeypatch, tmp_path) -> None:
-    with _build_client(monkeypatch, tmp_path, admin_email="alice@x.com") as client:
-        _seed_invite("invite-ok")
-        client.post(
-            "/register",
-            data={"name": "Alice", "email": "Alice@X.com", "password": "verysecure", "token": "invite-ok"},
-            follow_redirects=False,
-        )
-
-    db = get_db()
-    user = list(db.query("SELECT role FROM users LIMIT 1"))[0]
-    assert user["role"] == "admin"
-
-
-def test_register_first_user_admin_when_admin_email_unset(monkeypatch, tmp_path) -> None:
+def test_register_duplicate_username_shows_error(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
         _seed_invite("invite-ok")
         client.post(
             "/register",
-            data={"name": "First", "email": "first@x.com", "password": "verysecure", "token": "invite-ok"},
+            data={"name": "One", "username": "dup-user", "password": "verysecure", "token": "invite-ok"},
+            follow_redirects=False,
+        )
+
+        response = client.post(
+            "/register",
+            data={"name": "Two", "username": "dup-user", "password": "anothervalue", "token": "invite-ok"},
+        )
+
+    assert response.status_code == 409
+    _assert_html_response(response)
+    assert "This username is already taken — please choose a different one." in response.text
+    soup = BeautifulSoup(response.text, "html.parser")
+    assert soup.find("input", {"name": "name", "value": "Two"}) is not None
+    assert soup.find("input", {"name": "username", "value": "dup-user"}) is not None
+    assert soup.find("input", {"name": "password", "value": "anothervalue"}) is not None
+    assert soup.find("input", {"name": "token", "value": "invite-ok"}) is not None
+    assert get_db()["users"].count == 1
+
+
+def test_register_duplicate_username_can_resubmit_with_same_token(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        _seed_invite("invite-ok")
+        client.post(
+            "/register",
+            data={"name": "One", "username": "dup-user", "password": "verysecure", "token": "invite-ok"},
+            follow_redirects=False,
+        )
+
+        duplicate_response = client.post(
+            "/register",
+            data={"name": "Two", "username": "dup-user", "password": "anothervalue", "token": "invite-ok"},
+        )
+        recovery_response = client.post(
+            "/register",
+            data={"name": "Two", "username": "dup-user-2", "password": "anothervalue", "token": "invite-ok"},
+            follow_redirects=False,
+        )
+
+    assert duplicate_response.status_code == 409
+    assert recovery_response.status_code == 303
+    assert recovery_response.headers["location"] == "/"
+    assert get_db()["users"].count == 2
+
+
+def test_register_first_user_is_admin(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        _seed_invite("invite-ok")
+        client.post(
+            "/register",
+            data={"name": "First", "username": "first-user", "password": "verysecure", "token": "invite-ok"},
             follow_redirects=False,
         )
 
@@ -173,21 +252,36 @@ def test_register_first_user_admin_when_admin_email_unset(monkeypatch, tmp_path)
     assert user["role"] == "admin"
 
 
-def test_register_next_user_member_when_users_exist(monkeypatch, tmp_path) -> None:
+def test_register_second_user_is_member(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
         _seed_invite("invite-ok")
         db = get_db()
-        insert_user(db, name="Existing", email="existing@x.com", password_hash=hash_password("existingpass"), role="admin")
+        insert_user(db, name="Existing", username="existing", password_hash=hash_password("existingpass"), role="admin")
 
         client.post(
             "/register",
-            data={"name": "Second", "email": "second@x.com", "password": "verysecure", "token": "invite-ok"},
+            data={"name": "Second", "username": "second-user", "password": "verysecure", "token": "invite-ok"},
             follow_redirects=False,
         )
 
     db = get_db()
-    second = list(db.query("SELECT role FROM users WHERE email = ?", ["second@x.com"]))[0]
+    second = list(db.query("SELECT role FROM users WHERE username = ?", ["second-user"]))[0]
     assert second["role"] == "member"
+
+
+def test_register_role_assignment_independent_of_admin_email(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADMIN_EMAIL", "ignored@example.com")
+    with _build_client(monkeypatch, tmp_path) as client:
+        _seed_invite("invite-ok")
+        client.post(
+            "/register",
+            data={"name": "First", "username": "first-user", "password": "verysecure", "token": "invite-ok"},
+            follow_redirects=False,
+        )
+
+    db = get_db()
+    user = list(db.query("SELECT role FROM users LIMIT 1"))[0]
+    assert user["role"] == "admin"
 
 
 def test_register_rotated_token_rejected(monkeypatch, tmp_path) -> None:
@@ -198,7 +292,7 @@ def test_register_rotated_token_rejected(monkeypatch, tmp_path) -> None:
 
         response = client.post(
             "/register",
-            data={"name": "Alice", "email": "alice@x.com", "password": "verysecure", "token": "old-token"},
+            data={"name": "Alice", "username": "alice", "password": "verysecure", "token": "old-token"},
         )
 
     assert response.status_code == 403
@@ -206,35 +300,17 @@ def test_register_rotated_token_rejected(monkeypatch, tmp_path) -> None:
     assert get_invite_token(get_db()) == "new-token"
 
 
-def test_register_duplicate_email_rejected(monkeypatch, tmp_path) -> None:
-    with _build_client(monkeypatch, tmp_path) as client:
-        _seed_invite("invite-ok")
-        client.post(
-            "/register",
-            data={"name": "One", "email": "dup@x.com", "password": "verysecure", "token": "invite-ok"},
-            follow_redirects=False,
-        )
+# --- /login route tests ---
 
-        response = client.post(
-            "/register",
-            data={"name": "Two", "email": "DUP@x.com", "password": "anothervalue", "token": "invite-ok"},
-        )
-
-    assert response.status_code == 409
-    _assert_html_response(response)
-    assert "Email is already registered." in response.text
-    assert get_db()["users"].count == 1
-
-
-def test_login_valid_credentials_sets_cookie(monkeypatch, tmp_path) -> None:
+def test_login_success_sets_cookie(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
         db = get_db()
         init_schema(db)
-        insert_user(db, name="User", email="user@x.com", password_hash=hash_password("verysecure"), role="member")
+        insert_user(db, name="User", username="user", password_hash=hash_password("verysecure"), role="member")
 
         response = client.post(
             "/login",
-            data={"email": "USER@x.com", "password": "verysecure"},
+            data={"username": "user", "password": "verysecure"},
             follow_redirects=False,
         )
 
@@ -247,11 +323,11 @@ def test_login_cookie_round_trip_reaches_home(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
         db = get_db()
         init_schema(db)
-        insert_user(db, name="User", email="user@x.com", password_hash=hash_password("verysecure"), role="member")
+        insert_user(db, name="User", username="user", password_hash=hash_password("verysecure"), role="member")
 
         login_response = client.post(
             "/login",
-            data={"email": "user@x.com", "password": "verysecure"},
+            data={"username": "user", "password": "verysecure"},
             follow_redirects=False,
         )
         session_cookie = login_response.cookies.get("session")
@@ -265,23 +341,48 @@ def test_login_cookie_round_trip_reaches_home(monkeypatch, tmp_path) -> None:
     assert "Paste an Airbnb or Booking URL above to get started" in home_response.text
 
 
-def test_login_wrong_password_and_missing_email_share_error(monkeypatch, tmp_path) -> None:
+def test_login_unknown_username_returns_error(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
         db = get_db()
         init_schema(db)
-        insert_user(db, name="User", email="user@x.com", password_hash=hash_password("verysecure"), role="member")
+        insert_user(db, name="User", username="user", password_hash=hash_password("verysecure"), role="member")
 
-        wrong_password = client.post("/login", data={"email": "user@x.com", "password": "badpass"})
-        wrong_email = client.post("/login", data={"email": "ghost@x.com", "password": "badpass"})
+        response = client.post("/login", data={"username": "ghost", "password": "badpass"})
 
-    assert wrong_password.status_code == 401
-    assert wrong_email.status_code == 401
-    _assert_html_response(wrong_password)
-    _assert_html_response(wrong_email)
-    assert "Invalid email or password." in wrong_password.text
-    assert wrong_password.text == wrong_email.text
-    assert "set-cookie" not in wrong_password.headers
-    assert "set-cookie" not in wrong_email.headers
+    assert response.status_code == 401
+    _assert_html_response(response)
+    assert "Invalid username or password." in response.text
+    assert "set-cookie" not in response.headers
+
+
+def test_login_wrong_password_returns_same_error(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        db = get_db()
+        init_schema(db)
+        insert_user(db, name="User", username="user", password_hash=hash_password("verysecure"), role="member")
+
+        response = client.post("/login", data={"username": "user", "password": "wrongpass"})
+
+    assert response.status_code == 401
+    _assert_html_response(response)
+    assert "Invalid username or password." in response.text
+    assert "set-cookie" not in response.headers
+
+
+def test_login_case_insensitive_username(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        db = get_db()
+        init_schema(db)
+        insert_user(db, name="User", username="alice", password_hash=hash_password("verysecure"), role="member")
+
+        response = client.post(
+            "/login",
+            data={"username": "ALICE", "password": "verysecure"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
 
 
 def test_logout_clears_cookie_and_redirects(monkeypatch, tmp_path) -> None:
@@ -291,3 +392,56 @@ def test_logout_clears_cookie_and_redirects(monkeypatch, tmp_path) -> None:
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
     assert "max-age=0" in response.headers["set-cookie"].lower()
+
+
+def test_authenticated_header_logout_control_posts_to_logout(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        db = get_db()
+        init_schema(db)
+        insert_user(db, name="User", username="user", password_hash=hash_password("verysecure"), role="member")
+
+        login_response = client.post(
+            "/login",
+            data={"username": "user", "password": "verysecure"},
+            follow_redirects=False,
+        )
+        session_cookie = login_response.cookies.get("session")
+        assert session_cookie is not None
+
+        home_response = client.get("/", cookies={"session": session_cookie}, follow_redirects=False)
+
+    assert home_response.status_code == 200
+    soup = BeautifulSoup(home_response.text, "html.parser")
+    logout_form = soup.find("form", {"action": "/logout"})
+    assert logout_form is not None
+    assert (logout_form.get("method") or "").lower() == "post"
+    assert logout_form.find("button", string="Logout") is not None
+
+
+def test_login_logout_login_again_round_trip(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        db = get_db()
+        init_schema(db)
+        insert_user(db, name="User", username="user", password_hash=hash_password("verysecure"), role="member")
+
+        first_login = client.post(
+            "/login",
+            data={"username": "user", "password": "verysecure"},
+            follow_redirects=False,
+        )
+        session_cookie = first_login.cookies.get("session")
+        assert session_cookie is not None
+
+        logout = client.post("/logout", cookies={"session": session_cookie}, follow_redirects=False)
+        relogin = client.post(
+            "/login",
+            data={"username": "user", "password": "verysecure"},
+            follow_redirects=False,
+        )
+
+    assert first_login.status_code == 303
+    assert logout.status_code == 303
+    assert logout.headers["location"] == "/login"
+    assert "max-age=0" in logout.headers["set-cookie"].lower()
+    assert relogin.status_code == 303
+    assert relogin.headers["location"] == "/"

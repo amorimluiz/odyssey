@@ -30,7 +30,14 @@ def nav_header(request: Request | None) -> Header:
     else:
         if user.get("role") == "admin":
             links.append(A("Admin", href="/admin"))
-        links.append(A("Logout", href="/logout"))
+        links.append(
+            Form(
+                Button("Logout", type="submit", cls="nav-logout-button"),
+                method="post",
+                action="/logout",
+                cls="nav-logout-form",
+            )
+        )
 
     return Header(
         Nav(*links, cls="nav-links"),
@@ -181,7 +188,7 @@ def admin_panel(*, invite_url: str, members: list[dict]) -> Div:
     rows = [
         Tr(
             Td(member.get("name", "")),
-            Td(member.get("email", "")),
+            Td(member.get("username", "")),
             Td(member.get("created_at", "")),
         )
         for member in members
@@ -191,7 +198,7 @@ def admin_panel(*, invite_url: str, members: list[dict]) -> Div:
         invite_link_fragment(invite_url),
         H2("Members", cls="section-title"),
         Table(
-            Thead(Tr(Th("Name"), Th("Email"), Th("Joined"))),
+            Thead(Tr(Th("Name"), Th("Username"), Th("Joined"))),
             Tbody(*rows),
             cls="members-table",
         ),

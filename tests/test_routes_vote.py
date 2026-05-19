@@ -14,20 +14,19 @@ from app.db import count_votes_for_house, get_db, init_schema, insert_house, ins
 def _build_client(monkeypatch, tmp_path) -> TestClient:
     monkeypatch.setenv("SECRET_KEY", "s" * 32)
     monkeypatch.setenv("DB_PATH", str(tmp_path / "app.db"))
-    monkeypatch.delenv("ADMIN_EMAIL", raising=False)
     import main
 
     importlib.reload(main)
     return TestClient(main.create_app())
 
 
-def _make_user(client: TestClient, email: str) -> int:
+def _make_user(client: TestClient, username: str) -> int:
     db = get_db()
     init_schema(db)
     user_id = insert_user(
         db,
-        name=email.split("@")[0],
-        email=email,
+        name=username,
+        username=username,
         password_hash=hash_password("verysecure"),
         role="member",
     )
@@ -71,7 +70,7 @@ def test_vote_button_renders_unvoted_variant() -> None:
 
 def test_vote_toggle_authenticated_vote_then_unvote(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
-        user_id = _make_user(client, "member@example.com")
+        user_id = _make_user(client, "member")
         _set_session(client, user_id)
         house_id = _seed_house(user_id)
 
@@ -91,7 +90,7 @@ def test_vote_toggle_authenticated_vote_then_unvote(monkeypatch, tmp_path) -> No
 
 def test_vote_toggle_unauthenticated_returns_401(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
-        user_id = _make_user(client, "owner@example.com")
+        user_id = _make_user(client, "owner")
         house_id = _seed_house(user_id)
 
         response = client.post(f"/houses/{house_id}/vote")
@@ -101,7 +100,7 @@ def test_vote_toggle_unauthenticated_returns_401(monkeypatch, tmp_path) -> None:
 
 def test_vote_toggle_unknown_house_returns_404(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
-        user_id = _make_user(client, "member@example.com")
+        user_id = _make_user(client, "member")
         _set_session(client, user_id)
 
         response = client.post("/houses/9999/vote")
@@ -111,8 +110,8 @@ def test_vote_toggle_unknown_house_returns_404(monkeypatch, tmp_path) -> None:
 
 def test_vote_toggle_cross_user_isolation_and_double_toggle(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
-        user_a = _make_user(client, "a@example.com")
-        user_b = _make_user(client, "b@example.com")
+        user_a = _make_user(client, "user-a")
+        user_b = _make_user(client, "user-b")
         house_id = _seed_house(user_a)
 
         _set_session(client, user_a)
@@ -138,8 +137,8 @@ def test_vote_toggle_cross_user_isolation_and_double_toggle(monkeypatch, tmp_pat
 
 def test_vote_toggle_ignores_user_id_payload_and_query(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
-        jwt_user = _make_user(client, "jwt@example.com")
-        attacker = _make_user(client, "attacker@example.com")
+        jwt_user = _make_user(client, "jwt-user")
+        attacker = _make_user(client, "attacker")
         house_id = _seed_house(jwt_user)
 
         _set_session(client, jwt_user)
@@ -157,7 +156,7 @@ def test_vote_toggle_ignores_user_id_payload_and_query(monkeypatch, tmp_path) ->
 
 def test_vote_uniqueness_enforced_at_db_level(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
-        user_id = _make_user(client, "unique@example.com")
+        user_id = _make_user(client, "unique-user")
         house_id = _seed_house(user_id)
         db = get_db()
 

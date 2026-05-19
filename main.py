@@ -64,8 +64,6 @@ def create_app() -> FastHTML:
     async def startup() -> None:
         db = app_db.get_db()
         app_db.init_schema(db)
-        if settings.admin_email and "@" not in settings.admin_email:
-            logger.warning("ADMIN_EMAIL appears invalid: %s", settings.admin_email)
 
     app.mount("/static", StaticFiles(directory="static"), name="static")
 

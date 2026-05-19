@@ -14,7 +14,6 @@ def isolate_environment(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(app.config, "load_dotenv", lambda: None)
     monkeypatch.delenv("DB_PATH", raising=False)
     monkeypatch.delenv("SECRET_KEY", raising=False)
-    monkeypatch.delenv("ADMIN_EMAIL", raising=False)
     monkeypatch.delenv("BASE_URL", raising=False)
     monkeypatch.delenv("APP_ENV", raising=False)
     monkeypatch.delenv("ENV", raising=False)

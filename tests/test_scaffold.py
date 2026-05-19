@@ -22,14 +22,12 @@ def test_modules_import(module_name: str) -> None:
 def test_get_settings_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DB_PATH", "./tmp.db")
     monkeypatch.setenv("SECRET_KEY", "s" * 32)
-    monkeypatch.setenv("ADMIN_EMAIL", "admin@example.com")
 
     result = get_settings()
 
     assert isinstance(result, Settings)
     assert result.db_path == "./tmp.db"
     assert result.secret_key == "s" * 32
-    assert result.admin_email == "admin@example.com"
 
 
 def test_get_settings_requires_secret_key() -> None:
@@ -37,12 +35,12 @@ def test_get_settings_requires_secret_key() -> None:
         get_settings()
 
 
-def test_get_settings_admin_email_defaults_none(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_settings_has_no_admin_email_attribute(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SECRET_KEY", "k" * 32)
 
     result = get_settings()
 
-    assert result.admin_email is None
+    assert not hasattr(result, "admin_email")
 
 
 def test_python_import_app_subprocess() -> None:

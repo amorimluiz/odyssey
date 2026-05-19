@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
+import unicodedata
 from datetime import UTC, datetime
 from typing import Any
 
@@ -16,11 +18,19 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def slugify(text: str) -> str:
+    """ASCII slug: lowercase, diacritics stripped, non-alnum replaced with hyphen."""
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    text = re.sub(r"[^\w\s-]", "", text).strip().lower()
+    return re.sub(r"[\s_-]+", "-", text).strip("-")
+
+
 def get_db() -> Database:
     """Open configured SQLite database and enable required pragmas."""
     db = Database(get_settings().db_path)
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA foreign_keys=ON")
+    db.conn.create_function("slugify", 1, slugify)
     return db
 
 
@@ -36,7 +46,7 @@ def init_schema(db: Database) -> None:
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
-            email TEXT NOT NULL,
+            username TEXT NOT NULL,
             password_hash TEXT NOT NULL,
             role TEXT NOT NULL DEFAULT 'member',
             created_at TEXT NOT NULL
@@ -64,7 +74,7 @@ def init_schema(db: Database) -> None:
         """
     )
 
-    db["users"].create_index(["email"], unique=True, if_not_exists=True)
+    db["users"].create_index(["username"], unique=True, if_not_exists=True, index_name="users_username")
     db["houses"].create_index(["source", "external_id"], unique=True, if_not_exists=True)
 
 
@@ -72,7 +82,7 @@ def insert_user(
     db: Database,
     *,
     name: str,
-    email: str,
+    username: str,
     password_hash: str,
     role: str = "member",
     created_at: str | None = None,
@@ -81,7 +91,7 @@ def insert_user(
     db["users"].insert(
         {
             "name": name,
-            "email": email.lower(),
+            "username": username.lower(),
             "password_hash": password_hash,
             "role": role,
             "created_at": created_at or _utc_now_iso(),
@@ -91,9 +101,9 @@ def insert_user(
     return int(row_id)
 
 
-def get_user_by_email(db: Database, email: str) -> dict[str, Any] | None:
-    """Return user row for email (case-insensitive), or None."""
-    rows = list(db.query("SELECT * FROM users WHERE email = ?", [email.lower()]))
+def get_user_by_username(db: Database, username: str) -> dict[str, Any] | None:
+    """Return user row for username (case-insensitive), or None."""
+    rows = list(db.query("SELECT * FROM users WHERE LOWER(username) = LOWER(?)", [username]))
     return dict(rows[0]) if rows else None
 
 
@@ -239,7 +249,7 @@ def list_users(db: Database) -> list[dict[str, Any]]:
     """Return users sorted by join date ascending."""
     rows = db.query(
         """
-        SELECT id, name, email, role, created_at
+        SELECT id, name, username, role, created_at
         FROM users
         ORDER BY created_at ASC
         """
