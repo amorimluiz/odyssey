@@ -10,10 +10,10 @@ from fasthtml.common import Button, Div, FastHTML, Form, Input, Label, P
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 
-from app.auth import clear_session_cookie, hash_password, issue_token, require_user, set_session_cookie, verify_password
-from app.components import base_layout, error_fragment, house_card, house_submit_form
+from app.auth import clear_session_cookie, current_user, hash_password, issue_token, require_user, set_session_cookie, verify_password
+from app.components import base_layout, error_fragment, house_card, house_submit_form, vote_button
 from app.config import get_settings
-from app.db import get_db, get_house_by_external_id, get_invite_token, get_user_by_email, houses_ranked, insert_house, insert_user
+from app.db import count_votes_for_house, get_db, get_house_by_external_id, get_house_by_id, get_invite_token, get_user_by_email, houses_ranked, insert_house, insert_user, toggle_vote, user_voted_house_ids
 from app import scraper
 
 logger = logging.getLogger(__name__)
@@ -148,8 +148,9 @@ def register_routes(app: FastHTML) -> None:
 
         db = get_db()
         houses = houses_ranked(db)
+        voted_ids = user_voted_house_ids(db, int(user_or_response["sub"]))
         if houses:
-            list_content = [house_card(house) for house in houses]
+            list_content = [house_card(house, is_voted=int(house["id"]) in voted_ids) for house in houses]
         else:
             list_content = [P("Paste an Airbnb or Booking URL above to get started")]
 
@@ -225,5 +226,21 @@ def register_routes(app: FastHTML) -> None:
                 "description": og_data.description,
                 "price": og_data.price,
                 "vote_count": 0,
-            }
+            },
+            is_voted=False,
         )
+
+    @app.post("/houses/{house_id}/vote")
+    async def toggle_house_vote(request: Request, house_id: int):
+        user = current_user(request)
+        if user is None:
+            return Response(content="Unauthorized", status_code=401)
+
+        db = get_db()
+        house = get_house_by_id(db, house_id)
+        if house is None:
+            return Response(content="House not found", status_code=404)
+
+        is_voted = toggle_vote(db, int(user["sub"]), house_id)
+        house["vote_count"] = count_votes_for_house(db, house_id)
+        return vote_button(house, is_voted)

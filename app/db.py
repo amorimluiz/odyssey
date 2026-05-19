@@ -145,6 +145,26 @@ def get_house_by_external_id(db: Database, source: str, external_id: str) -> dic
     return dict(rows[0]) if rows else None
 
 
+def get_house_by_id(db: Database, house_id: int) -> dict[str, Any] | None:
+    """Return house by id, or None."""
+    rows = list(db.query("SELECT * FROM houses WHERE id = ? LIMIT 1", [house_id]))
+    return dict(rows[0]) if rows else None
+
+
+def count_votes_for_house(db: Database, house_id: int) -> int:
+    """Return current vote count for a house id."""
+    row = list(
+        db.query("SELECT COUNT(*) AS c FROM votes WHERE house_id = ?", [house_id])
+    )[0]
+    return int(row["c"])
+
+
+def user_voted_house_ids(db: Database, user_id: int) -> set[int]:
+    """Return house ids currently voted by user."""
+    rows = db.query("SELECT house_id FROM votes WHERE user_id = ?", [user_id])
+    return {int(row["house_id"]) for row in rows}
+
+
 def houses_ranked(db: Database) -> list[dict[str, Any]]:
     """Return houses with vote_count sorted by rank rules."""
     rows = db.query(
@@ -180,6 +200,7 @@ def toggle_vote(db: Database, user_id: int, house_id: int, voted_at: str | None 
     )
     if existing:
         db["votes"].delete_where("user_id = ? AND house_id = ?", [user_id, house_id])
+        db.conn.commit()
         return False
 
     db["votes"].insert(
@@ -189,6 +210,7 @@ def toggle_vote(db: Database, user_id: int, house_id: int, voted_at: str | None 
             "voted_at": voted_at or _utc_now_iso(),
         }
     )
+    db.conn.commit()
     return True
 
 

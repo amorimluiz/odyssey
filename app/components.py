@@ -56,7 +56,24 @@ def house_submit_form() -> Form:
     )
 
 
-def house_card(house: dict, *, highlight: bool = False, oob: bool = False) -> Div:
+def vote_button(house: dict, is_voted: bool) -> Button:
+    """Render HTMX vote toggle button fragment."""
+    vote_count = int(house.get("vote_count", 0))
+    label = "Voted" if is_voted else "Vote"
+    btn_class = "house-card-vote-btn is-voted" if is_voted else "house-card-vote-btn"
+    return Button(
+        f"{label} ({vote_count})",
+        type="button",
+        id=f'vote-button-{house.get("id")}',
+        aria_pressed="true" if is_voted else "false",
+        hx_post=f'/houses/{house.get("id")}/vote',
+        hx_target="this",
+        hx_swap="outerHTML",
+        cls=btn_class,
+    )
+
+
+def house_card(house: dict, *, is_voted: bool = False, highlight: bool = False, oob: bool = False) -> Div:
     """Render a reusable house card fragment for list and HTMX responses."""
     image_url = house.get("image_url")
     image = (
@@ -86,8 +103,7 @@ def house_card(house: dict, *, highlight: bool = False, oob: bool = False) -> Di
             P(short_description, cls="house-card-description") if short_description else None,
             P(str(house["price"]), cls="house-card-price") if house.get("price") else None,
             Div(
-                Span(f'{int(house.get("vote_count", 0))} votes', cls="house-card-votes"),
-                Button("Vote", type="button", cls="house-card-vote-btn"),
+                vote_button(house, is_voted),
                 cls="house-card-vote-row",
             ),
             A(
