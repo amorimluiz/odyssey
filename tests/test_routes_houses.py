@@ -20,7 +20,6 @@ EXAMPLE_URLS_PATH = Path(
 def _build_client(monkeypatch, tmp_path) -> TestClient:
     monkeypatch.setenv("SECRET_KEY", "s" * 32)
     monkeypatch.setenv("DB_PATH", str(tmp_path / "app.db"))
-    monkeypatch.delenv("ADMIN_EMAIL", raising=False)
     import main
 
     importlib.reload(main)
@@ -33,7 +32,7 @@ def _login_cookie(client: TestClient, *, role: str = "member") -> int:
     user_id = insert_user(
         db,
         name="Member",
-        email="member@example.com",
+        username="member",
         password_hash=hash_password("verysecure"),
         role=role,
     )

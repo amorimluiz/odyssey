@@ -12,7 +12,6 @@ from app.db import get_db, get_invite_token, init_schema, insert_user, set_invit
 def _build_client(monkeypatch, tmp_path, *, base_url: str | None = None) -> TestClient:
     monkeypatch.setenv("SECRET_KEY", "s" * 32)
     monkeypatch.setenv("DB_PATH", str(tmp_path / "app.db"))
-    monkeypatch.delenv("ADMIN_EMAIL", raising=False)
     if base_url is None:
         monkeypatch.delenv("BASE_URL", raising=False)
     else:
@@ -23,13 +22,13 @@ def _build_client(monkeypatch, tmp_path, *, base_url: str | None = None) -> Test
     return TestClient(main.create_app())
 
 
-def _make_user(*, name: str, email: str, role: str, created_at: str) -> int:
+def _make_user(*, name: str, username: str, role: str, created_at: str) -> int:
     db = get_db()
     init_schema(db)
     return insert_user(
         db,
         name=name,
-        email=email,
+        username=username,
         password_hash=hash_password("verysecure"),
         role=role,
         created_at=created_at,
@@ -52,7 +51,7 @@ def test_get_admin_member_forbidden(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
         user_id = _make_user(
             name="Member",
-            email="member@example.com",
+            username="member",
             role="member",
             created_at="2026-01-01T00:00:00+00:00",
         )
@@ -67,19 +66,19 @@ def test_get_admin_uses_base_url_and_sorts_member_list(monkeypatch, tmp_path) ->
     with _build_client(monkeypatch, tmp_path, base_url="https://trip.example.com") as client:
         admin_id = _make_user(
             name="Admin",
-            email="admin@example.com",
+            username="admin-user",
             role="admin",
             created_at="2026-01-02T00:00:00+00:00",
         )
         _make_user(
             name="Alice",
-            email="alice@example.com",
+            username="alice",
             role="member",
             created_at="2026-01-01T00:00:00+00:00",
         )
         _make_user(
             name="Bob",
-            email="bob@example.com",
+            username="bob",
             role="member",
             created_at="2026-01-03T00:00:00+00:00",
         )
@@ -103,7 +102,7 @@ def test_get_admin_falls_back_to_request_host_for_invite_url(monkeypatch, tmp_pa
     with _build_client(monkeypatch, tmp_path) as client:
         admin_id = _make_user(
             name="Admin",
-            email="admin@example.com",
+            username="admin-user",
             role="admin",
             created_at="2026-01-01T00:00:00+00:00",
         )
@@ -120,7 +119,7 @@ def test_post_rotate_invite_updates_db_returns_fragment_and_invalidates_old_toke
     with _build_client(monkeypatch, tmp_path, base_url="https://trip.example.com") as client:
         admin_id = _make_user(
             name="Admin",
-            email="admin@example.com",
+            username="admin-user",
             role="admin",
             created_at="2026-01-01T00:00:00+00:00",
         )
@@ -147,7 +146,7 @@ def test_post_rotate_invite_logs_admin_id_without_token(monkeypatch, tmp_path, c
     with _build_client(monkeypatch, tmp_path) as client:
         admin_id = _make_user(
             name="Admin",
-            email="admin@example.com",
+            username="admin-user",
             role="admin",
             created_at="2026-01-01T00:00:00+00:00",
         )
@@ -171,7 +170,7 @@ def test_post_rotate_invite_member_forbidden(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
         user_id = _make_user(
             name="Member",
-            email="member@example.com",
+            username="member",
             role="member",
             created_at="2026-01-01T00:00:00+00:00",
         )
@@ -180,3 +179,29 @@ def test_post_rotate_invite_member_forbidden(monkeypatch, tmp_path) -> None:
         response = client.post("/admin/rotate-invite")
 
     assert response.status_code == 403
+
+
+def test_admin_panel_shows_username_column_not_email(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        admin_id = _make_user(
+            name="Admin",
+            username="admin-user",
+            role="admin",
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        _make_user(
+            name="Alice",
+            username="alice",
+            role="member",
+            created_at="2026-01-02T00:00:00+00:00",
+        )
+        set_invite_token(get_db(), "seed-token")
+        _set_session(client, admin_id, "admin")
+
+        response = client.get("/admin")
+
+    assert response.status_code == 200
+    assert "<th>Username</th>" in response.text
+    assert "<th>Email</th>" not in response.text
+    assert "<td>alice</td>" in response.text
+    assert "<td>admin-user</td>" in response.text
