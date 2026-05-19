@@ -18,6 +18,10 @@ def test_base_layout_includes_title_and_htmx_script() -> None:
     html = _render(base_layout("hello", title="Houses"))
 
     assert "<title>Houses</title>" in html
+    assert html.count('name="viewport"') == 1
+    assert 'content="width=device-width, initial-scale=1"' in html
+    assert 'name="htmx-config"' in html
+    assert "422|502" in html
     assert "htmx.min.js" in html
 
 
@@ -77,6 +81,21 @@ def test_home_renders_layout_and_nav(monkeypatch, tmp_path) -> None:
 
     assert response.status_code == 307
     assert response.headers["location"] == "/login"
+
+
+def test_login_page_renders_html_shell(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("SECRET_KEY", "s" * 32)
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "app.db"))
+
+    import main
+
+    importlib.reload(main)
+    with TestClient(main.create_app()) as client:
+        response = client.get("/login")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "<form" in response.text
 
 
 def test_startup_calls_init_schema_once(monkeypatch, tmp_path) -> None:

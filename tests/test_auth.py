@@ -40,12 +40,23 @@ def test_verify_password_rejects_different_plaintext() -> None:
 
 def test_issue_and_decode_token_round_trip(settings) -> None:
     token = issue_token(42, "member")
+    raw_payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
     payload = decode_token(token)
 
+    assert raw_payload["sub"] == "42"
     assert payload is not None
-    assert payload["sub"] == 42
+    assert payload["sub"] == "42"
+    assert int(payload["sub"]) == 42
     assert payload["role"] == "member"
     assert isinstance(payload["exp"], int)
+
+
+def test_issue_token_emits_string_subject_claim(settings) -> None:
+    token = issue_token(7, "admin")
+    raw_payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
+
+    assert isinstance(raw_payload["sub"], str)
+    assert raw_payload["sub"] == "7"
 
 
 def test_decode_token_rejects_different_signing_key(monkeypatch) -> None:
@@ -83,7 +94,7 @@ def test_current_user_valid_cookie_returns_payload(settings) -> None:
 
     payload = current_user(request)
     assert payload is not None
-    assert payload["sub"] == 7
+    assert payload["sub"] == "7"
     assert payload["role"] == "admin"
 
 

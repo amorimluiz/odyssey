@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 
+from bs4 import BeautifulSoup
 from starlette.testclient import TestClient
 
 from app.auth import hash_password
@@ -27,6 +28,10 @@ def _seed_invite(token: str) -> None:
     set_invite_token(db, token)
 
 
+def _assert_html_response(response) -> None:
+    assert response.headers["content-type"].startswith("text/html")
+
+
 def test_get_invite_valid_returns_form(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
         _seed_invite("invite-ok")
@@ -34,7 +39,11 @@ def test_get_invite_valid_returns_form(monkeypatch, tmp_path) -> None:
         response = client.get("/invite/invite-ok")
 
     assert response.status_code == 200
+    _assert_html_response(response)
     assert "Create account" in response.text
+    soup = BeautifulSoup(response.text, "html.parser")
+    assert len(soup.find_all("form")) == 1
+    assert soup.find("input", {"name": "token", "value": "invite-ok"}) is not None
 
 
 def test_get_invite_invalid_returns_403_same_shell(monkeypatch, tmp_path) -> None:
@@ -46,10 +55,28 @@ def test_get_invite_invalid_returns_403_same_shell(monkeypatch, tmp_path) -> Non
 
     assert bad.status_code == 403
     assert other_bad.status_code == 403
+    _assert_html_response(bad)
+    _assert_html_response(other_bad)
     assert "Create account" in bad.text
     assert "disabled" in bad.text
     assert "disabled" in other_bad.text
     assert "Create account" in other_bad.text
+    soup = BeautifulSoup(bad.text, "html.parser")
+    alert = soup.find(attrs={"role": "alert"})
+    assert alert is not None
+    assert "This invite link is invalid or has been rotated. Ask your organizer for a new one." in alert.get_text(" ", strip=True)
+
+
+def test_get_invite_valid_does_not_render_alert(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        _seed_invite("invite-ok")
+
+        response = client.get("/invite/invite-ok")
+
+    assert response.status_code == 200
+    _assert_html_response(response)
+    soup = BeautifulSoup(response.text, "html.parser")
+    assert soup.find(attrs={"role": "alert"}) is None
 
 
 def test_register_lowercases_email_and_sets_session_cookie(monkeypatch, tmp_path) -> None:
@@ -76,6 +103,32 @@ def test_register_lowercases_email_and_sets_session_cookie(monkeypatch, tmp_path
     assert row["email"] == "alice@example.com"
 
 
+def test_register_cookie_round_trip_reaches_home(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        _seed_invite("invite-ok")
+
+        register_response = client.post(
+            "/register",
+            data={
+                "name": "Alice",
+                "email": "alice@example.com",
+                "password": "supersecure",
+                "token": "invite-ok",
+            },
+            follow_redirects=False,
+        )
+        session_cookie = register_response.cookies.get("session")
+        assert session_cookie is not None
+
+        home_response = client.get("/", cookies={"session": session_cookie}, follow_redirects=False)
+
+    assert register_response.status_code == 303
+    assert home_response.status_code == 200
+    _assert_html_response(home_response)
+    assert "Paste an Airbnb or Booking URL above to get started" in home_response.text
+    assert "/login" not in home_response.headers.get("location", "")
+
+
 def test_register_short_password_rejected_without_insert(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
         _seed_invite("invite-ok")
@@ -86,6 +139,7 @@ def test_register_short_password_rejected_without_insert(monkeypatch, tmp_path) 
         )
 
     assert response.status_code == 422
+    _assert_html_response(response)
     assert "Password must be at least 8 characters." in response.text
     db = get_db()
     assert db["users"].count == 0
@@ -148,6 +202,7 @@ def test_register_rotated_token_rejected(monkeypatch, tmp_path) -> None:
         )
 
     assert response.status_code == 403
+    _assert_html_response(response)
     assert get_invite_token(get_db()) == "new-token"
 
 
@@ -166,6 +221,7 @@ def test_register_duplicate_email_rejected(monkeypatch, tmp_path) -> None:
         )
 
     assert response.status_code == 409
+    _assert_html_response(response)
     assert "Email is already registered." in response.text
     assert get_db()["users"].count == 1
 
@@ -187,6 +243,28 @@ def test_login_valid_credentials_sets_cookie(monkeypatch, tmp_path) -> None:
     assert "session=" in response.headers["set-cookie"].lower()
 
 
+def test_login_cookie_round_trip_reaches_home(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        db = get_db()
+        init_schema(db)
+        insert_user(db, name="User", email="user@x.com", password_hash=hash_password("verysecure"), role="member")
+
+        login_response = client.post(
+            "/login",
+            data={"email": "user@x.com", "password": "verysecure"},
+            follow_redirects=False,
+        )
+        session_cookie = login_response.cookies.get("session")
+        assert session_cookie is not None
+
+        home_response = client.get("/", cookies={"session": session_cookie}, follow_redirects=False)
+
+    assert login_response.status_code == 303
+    assert home_response.status_code == 200
+    _assert_html_response(home_response)
+    assert "Paste an Airbnb or Booking URL above to get started" in home_response.text
+
+
 def test_login_wrong_password_and_missing_email_share_error(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
         db = get_db()
@@ -198,6 +276,8 @@ def test_login_wrong_password_and_missing_email_share_error(monkeypatch, tmp_pat
 
     assert wrong_password.status_code == 401
     assert wrong_email.status_code == 401
+    _assert_html_response(wrong_password)
+    _assert_html_response(wrong_email)
     assert "Invalid email or password." in wrong_password.text
     assert wrong_password.text == wrong_email.text
     assert "set-cookie" not in wrong_password.headers

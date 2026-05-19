@@ -138,7 +138,9 @@ def test_post_houses_invalid_domain_returns_422(monkeypatch, tmp_path) -> None:
         response = client.post("/houses", data={"url": "https://example.com/x"})
 
     assert response.status_code == 422
+    assert response.headers["content-type"] == "text/html; charset=utf-8"
     assert "Only Airbnb and Booking URLs are supported." in response.text
+    assert "error-fragment" in response.text
     assert get_db()["houses"].count == 0
 
 
@@ -207,6 +209,8 @@ def test_post_houses_og_failure_returns_502_and_logs(monkeypatch, tmp_path, capl
             response = client.post("/houses", data={"url": "https://www.airbnb.com/rooms/888"})
 
     assert response.status_code == 502
+    assert response.headers["content-type"] == "text/html; charset=utf-8"
+    assert "error-fragment retryable" in response.text
     assert "Please retry in a few seconds." in response.text
     assert get_db()["houses"].count == 0
     assert "status=timeout" in caplog.text
