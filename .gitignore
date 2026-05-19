@@ -8,3 +8,5 @@ htmlcov/
 *.pyc
 
 *.egg-info/
+
+.compozy/
