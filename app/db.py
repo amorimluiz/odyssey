@@ -1,1 +1,212 @@
-"""Database module placeholder for future tasks."""
+"""SQLite database helpers for Group House Voting."""
+
+from __future__ import annotations
+
+import sqlite3
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlite_utils import Database
+
+from app.config import get_settings
+from app.errors import DuplicateHouseError
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def get_db() -> Database:
+    """Open configured SQLite database and enable required pragmas."""
+    db = Database(get_settings().db_path)
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA foreign_keys=ON")
+    return db
+
+
+def init_schema(db: Database) -> None:
+    """Create schema and indexes if missing."""
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'member',
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS houses (
+            id INTEGER PRIMARY KEY,
+            source TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            title TEXT NOT NULL,
+            image_url TEXT,
+            description TEXT,
+            price TEXT,
+            submitted_by INTEGER NOT NULL REFERENCES users(id),
+            submitted_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS votes (
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            house_id INTEGER NOT NULL REFERENCES houses(id),
+            voted_at TEXT NOT NULL,
+            PRIMARY KEY(user_id, house_id)
+        );
+        """
+    )
+
+    db["users"].create_index(["email"], unique=True, if_not_exists=True)
+    db["houses"].create_index(["source", "external_id"], unique=True, if_not_exists=True)
+
+
+def insert_user(
+    db: Database,
+    *,
+    name: str,
+    email: str,
+    password_hash: str,
+    role: str = "member",
+    created_at: str | None = None,
+) -> int:
+    """Insert a user and return the new user id."""
+    db["users"].insert(
+        {
+            "name": name,
+            "email": email.lower(),
+            "password_hash": password_hash,
+            "role": role,
+            "created_at": created_at or _utc_now_iso(),
+        },
+    )
+    row_id = db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    return int(row_id)
+
+
+def get_user_by_email(db: Database, email: str) -> dict[str, Any] | None:
+    """Return user row for email (case-insensitive), or None."""
+    rows = list(db.query("SELECT * FROM users WHERE email = ?", [email.lower()]))
+    return dict(rows[0]) if rows else None
+
+
+def insert_house(
+    db: Database,
+    *,
+    source: str,
+    external_id: str,
+    url: str,
+    title: str,
+    submitted_by: int,
+    image_url: str | None = None,
+    description: str | None = None,
+    price: str | None = None,
+    submitted_at: str | None = None,
+) -> int:
+    """Insert house row and map unique collision to DuplicateHouseError."""
+    try:
+        db["houses"].insert(
+            {
+                "source": source,
+                "external_id": external_id,
+                "url": url,
+                "title": title,
+                "image_url": image_url,
+                "description": description,
+                "price": price,
+                "submitted_by": submitted_by,
+                "submitted_at": submitted_at or _utc_now_iso(),
+            },
+        )
+    except sqlite3.IntegrityError as exc:
+        if "houses.source, houses.external_id" in str(exc) or "UNIQUE constraint failed: houses.source, houses.external_id" in str(exc):
+            raise DuplicateHouseError("House already exists for source/external_id") from exc
+        raise
+
+    row_id = db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    return int(row_id)
+
+
+def get_house_by_external_id(db: Database, source: str, external_id: str) -> dict[str, Any] | None:
+    """Return house by unique key, or None."""
+    rows = list(
+        db.query(
+            "SELECT * FROM houses WHERE source = ? AND external_id = ? LIMIT 1",
+            [source, external_id],
+        )
+    )
+    return dict(rows[0]) if rows else None
+
+
+def houses_ranked(db: Database) -> list[dict[str, Any]]:
+    """Return houses with vote_count sorted by rank rules."""
+    rows = db.query(
+        """
+        SELECT
+            h.id,
+            h.source,
+            h.external_id,
+            h.url,
+            h.title,
+            h.image_url,
+            h.description,
+            h.price,
+            h.submitted_by,
+            h.submitted_at,
+            COUNT(v.user_id) AS vote_count
+        FROM houses h
+        LEFT JOIN votes v ON v.house_id = h.id
+        GROUP BY h.id
+        ORDER BY vote_count DESC, h.submitted_at ASC
+        """
+    )
+    return [dict(row) for row in rows]
+
+
+def toggle_vote(db: Database, user_id: int, house_id: int, voted_at: str | None = None) -> bool:
+    """Toggle a vote; return True if active after operation."""
+    existing = list(
+        db.query(
+            "SELECT 1 FROM votes WHERE user_id = ? AND house_id = ? LIMIT 1",
+            [user_id, house_id],
+        )
+    )
+    if existing:
+        db["votes"].delete_where("user_id = ? AND house_id = ?", [user_id, house_id])
+        return False
+
+    db["votes"].insert(
+        {
+            "user_id": user_id,
+            "house_id": house_id,
+            "voted_at": voted_at or _utc_now_iso(),
+        }
+    )
+    return True
+
+
+def get_invite_token(db: Database) -> str | None:
+    """Return active invite token, if present."""
+    rows = list(
+        db.query("SELECT value FROM settings WHERE key = ? LIMIT 1", ["invite_token"])
+    )
+    return None if not rows else str(rows[0]["value"])
+
+
+def set_invite_token(db: Database, token: str) -> None:
+    """Upsert active invite token."""
+    db.execute(
+        """
+        INSERT INTO settings(key, value)
+        VALUES(?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        ["invite_token", token],
+    )
