@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "name": "testing-python",
+  "owner": "timequity",
+  "repo": "plugins",
+  "path": "craft-coder/testing-python",
+  "branch": "main",
+  "sha": "d82e6b412c43fba4aa957a21d3bb86681024d3f6",
+  "source": "manual"
+}
