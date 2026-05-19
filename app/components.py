@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fasthtml.common import A, Body, Div, H1, Head, Header, Html, Nav, Script, Span, Title
+from fasthtml.common import A, Body, Button, Div, Form, H1, H2, Head, Header, Html, Img, Input, Nav, P, Script, Span, Title
 from starlette.requests import Request
 
 from app.auth import current_user
@@ -36,6 +36,73 @@ def error_fragment(message: str, retryable: bool = False) -> Div:
     if retry_hint is not None:
         children.append(retry_hint)
     return Div(*children, role="alert", cls="error-fragment")
+
+
+def house_submit_form() -> Form:
+    """Form that submits listing URLs and prepends new cards with HTMX."""
+    return Form(
+        Input(
+            id="house-url",
+            name="url",
+            type="url",
+            placeholder="https://www.airbnb.com/rooms/12345678",
+            required=True,
+        ),
+        Button("Add house", type="submit"),
+        hx_post="/houses",
+        hx_target="#house-list",
+        hx_swap="afterbegin",
+        cls="house-submit-form",
+    )
+
+
+def house_card(house: dict, *, highlight: bool = False, oob: bool = False) -> Div:
+    """Render a reusable house card fragment for list and HTMX responses."""
+    image_url = house.get("image_url")
+    image = (
+        Img(src=image_url, alt=str(house.get("title", "House listing")), cls="house-card-image")
+        if image_url
+        else Div("No image available", cls="house-card-image house-card-image-placeholder")
+    )
+    description = str(house.get("description") or "").strip()
+    short_description = description[:157] + "..." if len(description) > 160 else description
+
+    source = str(house.get("source", "")).lower()
+    source_label = "Airbnb" if source == "airbnb" else "Booking"
+
+    card_classes = "house-card"
+    if highlight:
+        card_classes += " house-card-highlight"
+
+    attrs = {}
+    if oob:
+        attrs["hx_swap_oob"] = "true"
+
+    return Div(
+        Div(image, cls="house-card-media"),
+        Div(
+            Span(source_label, cls="house-card-source"),
+            H2(str(house.get("title", "Untitled listing")), cls="house-card-title"),
+            P(short_description, cls="house-card-description") if short_description else None,
+            P(str(house["price"]), cls="house-card-price") if house.get("price") else None,
+            Div(
+                Span(f'{int(house.get("vote_count", 0))} votes', cls="house-card-votes"),
+                Button("Vote", type="button", cls="house-card-vote-btn"),
+                cls="house-card-vote-row",
+            ),
+            A(
+                "Open listing",
+                href=str(house.get("url", "#")),
+                rel="noopener noreferrer",
+                target="_blank",
+                cls="house-card-link",
+            ),
+            cls="house-card-content",
+        ),
+        id=f'house-{house.get("id")}',
+        cls=card_classes,
+        **attrs,
+    )
 
 
 def base_layout(*content, request: Request | None = None, title: str | None = None) -> Html:

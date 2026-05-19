@@ -12,6 +12,7 @@ Normalization rules locked for MVP deduplication:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 import re
 from urllib.parse import urlparse
 
@@ -35,6 +36,7 @@ _TIMEOUT = httpx.Timeout(connect=5.0, read=8.0, write=5.0, pool=5.0)
 _PRICE_RE = re.compile(
     r"(?:US\$|R\$|€|£|\$)\s?\d[\d.,]*(?:\s?(?:/|per|por)\s?[A-Za-z]+)?"
 )
+_last_fetch_meta: dict[str, str | int] = {"status": "unknown", "elapsed_ms": 0}
 
 
 @dataclass(frozen=True)
@@ -162,13 +164,28 @@ def _parse_og_markup(markup: str) -> OGData | None:
 
 
 async def fetch_og(url: str) -> OGData | None:
+    started = time.perf_counter()
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_BROWSER_HEADERS) as client:
             response = await client.get(url)
+    except httpx.TimeoutException:
+        _last_fetch_meta["status"] = "timeout"
+        _last_fetch_meta["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
+        return None
     except httpx.HTTPError:
+        _last_fetch_meta["status"] = "error"
+        _last_fetch_meta["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
         return None
 
     if not (200 <= response.status_code < 300):
+        _last_fetch_meta["status"] = int(response.status_code)
+        _last_fetch_meta["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
         return None
 
+    _last_fetch_meta["status"] = int(response.status_code)
+    _last_fetch_meta["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
     return _parse_og_markup(response.text)
+
+
+def last_fetch_meta() -> dict[str, str | int]:
+    return dict(_last_fetch_meta)

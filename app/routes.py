@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 from hmac import compare_digest
+import logging
 from typing import Protocol
 
 from fasthtml.common import Button, Div, FastHTML, Form, Input, Label, P
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 
-from app.auth import clear_session_cookie, hash_password, issue_token, set_session_cookie, verify_password
-from app.components import base_layout, error_fragment
+from app.auth import clear_session_cookie, hash_password, issue_token, require_user, set_session_cookie, verify_password
+from app.components import base_layout, error_fragment, house_card, house_submit_form
 from app.config import get_settings
-from app.db import get_db, get_invite_token, get_user_by_email, insert_user
+from app.db import get_db, get_house_by_external_id, get_invite_token, get_user_by_email, houses_ranked, insert_house, insert_user
+from app import scraper
+
+logger = logging.getLogger(__name__)
 
 
 class RoutesRegistrar(Protocol):
@@ -135,3 +139,91 @@ def register_routes(app: FastHTML) -> None:
         response = RedirectResponse(url="/login", status_code=303)
         clear_session_cookie(response)
         return response
+
+    @app.get("/")
+    async def home(request: Request):
+        user_or_response = require_user(request)
+        if isinstance(user_or_response, Response):
+            return user_or_response
+
+        db = get_db()
+        houses = houses_ranked(db)
+        if houses:
+            list_content = [house_card(house) for house in houses]
+        else:
+            list_content = [P("Paste an Airbnb or Booking URL above to get started")]
+
+        return base_layout(
+            house_submit_form(),
+            Div(*list_content, id="house-list"),
+            request=request,
+            title="Group House Voting",
+        )
+
+    @app.post("/houses")
+    async def submit_house(request: Request):
+        user_or_response = require_user(request)
+        if isinstance(user_or_response, Response):
+            return user_or_response
+
+        form = await request.form()
+        raw_url = str(form.get("url", "")).strip()
+        parsed = scraper.parse_url(raw_url)
+        if parsed is None:
+            logger.info("scraper outcome=parse_fail url=%s", raw_url)
+            return Response(
+                content=str(error_fragment("Only Airbnb and Booking URLs are supported.")),
+                status_code=422,
+            )
+
+        db = get_db()
+        existing = get_house_by_external_id(db, parsed.source, parsed.external_id)
+        if existing is not None:
+            existing_with_votes = dict(existing)
+            existing_with_votes["vote_count"] = 0
+            return (Div(), house_card(existing_with_votes, highlight=True, oob=True))
+
+        og_data = await scraper.fetch_og(parsed.normalized)
+        fetch_meta = scraper.last_fetch_meta()
+        if og_data is None:
+            logger.error(
+                "scraper outcome=og_fail url=%s status=%s elapsed_ms=%s",
+                parsed.normalized,
+                fetch_meta.get("status", "unknown"),
+                fetch_meta.get("elapsed_ms", 0),
+            )
+            return Response(
+                content=str(error_fragment("Could not fetch listing metadata.", retryable=True)),
+                status_code=502,
+            )
+
+        logger.info(
+            "scraper outcome=success url=%s status=%s elapsed_ms=%s",
+            parsed.normalized,
+            fetch_meta.get("status", "unknown"),
+            fetch_meta.get("elapsed_ms", 0),
+        )
+        house_id = insert_house(
+            db,
+            source=parsed.source,
+            external_id=parsed.external_id,
+            url=parsed.normalized,
+            title=og_data.title,
+            image_url=og_data.image_url,
+            description=og_data.description,
+            price=og_data.price,
+            submitted_by=int(user_or_response["sub"]),
+        )
+        return house_card(
+            {
+                "id": house_id,
+                "source": parsed.source,
+                "external_id": parsed.external_id,
+                "url": parsed.normalized,
+                "title": og_data.title,
+                "image_url": og_data.image_url,
+                "description": og_data.description,
+                "price": og_data.price,
+                "vote_count": 0,
+            }
+        )

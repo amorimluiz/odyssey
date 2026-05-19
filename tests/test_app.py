@@ -73,11 +73,10 @@ def test_home_renders_layout_and_nav(monkeypatch, tmp_path) -> None:
 
     importlib.reload(main)
     with TestClient(main.create_app()) as client:
-        response = client.get("/")
+        response = client.get("/", follow_redirects=False)
 
-    assert response.status_code == 200
-    assert "Group House Voting" in response.text
-    assert "Login" in response.text
+    assert response.status_code == 307
+    assert response.headers["location"] == "/login"
 
 
 def test_startup_calls_init_schema_once(monkeypatch, tmp_path) -> None:

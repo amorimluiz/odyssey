@@ -12,7 +12,6 @@ from starlette.responses import PlainTextResponse, Response
 from starlette.staticfiles import StaticFiles
 
 from app.auth import SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS, _cookie_secure_flag, current_user
-from app.components import base_layout
 from app.config import get_settings
 from app import db as app_db
 
@@ -73,10 +72,6 @@ def create_app() -> FastHTML:
     @app.get("/healthz")
     async def healthz() -> PlainTextResponse:
         return PlainTextResponse("ok")
-
-    @app.get("/")
-    async def home(request: Request):
-        return base_layout("Welcome", request=request, title="Group House Voting")
 
     _load_routes(app)
     return app
