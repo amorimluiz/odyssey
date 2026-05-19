@@ -7,14 +7,14 @@ import logging
 import uuid
 from typing import Protocol
 
-from fasthtml.common import Button, Div, FastHTML, Form, Input, Label, P
+from fasthtml.common import Button, Div, FastHTML, Form, Input, Label, P, to_xml
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
 from app.auth import clear_session_cookie, current_user, hash_password, issue_token, require_admin, require_user, set_session_cookie, verify_password
 from app.components import admin_panel, base_layout, error_fragment, house_card, house_submit_form, invite_link_fragment, vote_button
 from app.config import get_settings
-from app.db import count_votes_for_house, get_db, get_house_by_external_id, get_house_by_id, get_invite_token, get_user_by_email, houses_ranked, insert_house, insert_user, list_users, set_invite_token, toggle_vote, user_voted_house_ids
+from app.db import count_votes_for_house, get_db, get_house_by_external_id, get_house_by_id, get_invite_token, get_user_by_username, houses_ranked, insert_house, insert_user, list_users, set_invite_token, slugify, toggle_vote, user_voted_house_ids
 from app import scraper
 
 logger = logging.getLogger(__name__)
@@ -32,15 +32,21 @@ def register_routes(app: FastHTML) -> None:
     def _html_response(body, request: Request, *, title: str, status_code: int = 200) -> HTMLResponse:
         return HTMLResponse(content=str(base_layout(body, request=request, title=title)), status_code=status_code)
 
-    def _register_form(token: str, *, disabled: bool, error_message: str | None = None) -> Div:
+    def _register_form(token: str, *, disabled: bool, error_message: str | None = None, username: str = "") -> Div:
         error_node = error_fragment(error_message) if error_message else None
         return Div(
             error_node,
             Form(
                 Label("Name", fr="name", cls="form-label"),
-                Input(id="name", name="name", type="text", required=True, disabled=disabled, cls="text-input"),
-                Label("Email", fr="email", cls="form-label"),
-                Input(id="email", name="email", type="email", required=True, disabled=disabled, cls="text-input"),
+                Input(
+                    id="name", name="name", type="text", required=True, disabled=disabled, cls="text-input",
+                    hx_get="/username-preview",
+                    hx_trigger="input changed delay:300ms",
+                    hx_target="#username",
+                    hx_swap="outerHTML",
+                ),
+                Label("Username", fr="username", cls="form-label"),
+                Input(id="username", name="username", type="text", required=True, disabled=disabled, cls="text-input", value=username),
                 Label("Password", fr="password", cls="form-label"),
                 Input(id="password", name="password", type="password", required=True, disabled=disabled, cls="text-input"),
                 Input(name="token", type="hidden", value=token),
@@ -57,8 +63,8 @@ def register_routes(app: FastHTML) -> None:
         return Div(
             error_node,
             Form(
-                Label("Email", fr="email", cls="form-label"),
-                Input(id="email", name="email", type="email", required=True, cls="text-input"),
+                Label("Username", fr="username", cls="form-label"),
+                Input(id="username", name="username", type="text", required=True, cls="text-input"),
                 Label("Password", fr="password", cls="form-label"),
                 Input(id="password", name="password", type="password", required=True, cls="text-input"),
                 Button("Login", type="submit", cls="btn btn-primary"),
@@ -68,6 +74,12 @@ def register_routes(app: FastHTML) -> None:
             ),
             cls="auth-panel",
         )
+
+    @app.get("/username-preview")
+    async def username_preview(request: Request):
+        name = str(request.query_params.get("name", ""))
+        slug = slugify(name)
+        return HTMLResponse(content=to_xml(Input(id="username", name="username", type="text", value=slug, cls="text-input", required=True)))
 
     @app.get("/invite/{token}")
     async def invite_page(request: Request, token: str):
@@ -91,7 +103,7 @@ def register_routes(app: FastHTML) -> None:
         form = await request.form()
         token = str(form.get("token", ""))
         name = str(form.get("name", "")).strip()
-        email = str(form.get("email", "")).strip().lower()
+        username = slugify(str(form.get("username", "")).strip())
         password = str(form.get("password", ""))
 
         db = get_db()
@@ -102,25 +114,20 @@ def register_routes(app: FastHTML) -> None:
             return _html_response(body, request, title="Register", status_code=403)
 
         if len(password) < 8:
-            body = _register_form(token, disabled=False, error_message="Password must be at least 8 characters.")
+            body = _register_form(token, disabled=False, error_message="Password must be at least 8 characters.", username=username)
             return _html_response(body, request, title="Register", status_code=422)
 
-        if get_user_by_email(db, email) is not None:
-            body = _register_form(token, disabled=False, error_message="Email is already registered.")
+        if get_user_by_username(db, username) is not None:
+            body = _register_form(token, disabled=False, error_message="This username is already taken — please choose a different one.", username=username)
             return _html_response(body, request, title="Register", status_code=409)
 
-        settings = get_settings()
-        if settings.admin_email and settings.admin_email.strip().lower() == email:
-            role = "admin"
-        elif db["users"].count == 0:
-            role = "admin"
-        else:
-            role = "member"
+        user_count = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        role = "admin" if user_count == 0 else "member"
 
         user_id = insert_user(
             db,
             name=name,
-            email=email,
+            username=username,
             password_hash=hash_password(password),
             role=role,
         )
@@ -135,11 +142,11 @@ def register_routes(app: FastHTML) -> None:
     @app.post("/login")
     async def login(request: Request):
         form = await request.form()
-        email = str(form.get("email", "")).strip().lower()
+        username = str(form.get("username", "")).strip()
         password = str(form.get("password", ""))
-        user = get_user_by_email(get_db(), email)
+        user = get_user_by_username(get_db(), username)
 
-        generic_error = "Invalid email or password."
+        generic_error = "Invalid username or password."
         if user is None or not verify_password(password, str(user.get("password_hash", ""))):
             return _html_response(_login_form(error_message=generic_error), request, title="Login", status_code=401)
 
