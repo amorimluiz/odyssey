@@ -1,5 +1,7 @@
 .env
 *.db
+*.db-shm
+*.db-wal
 __pycache__/
 .pytest_cache/
 .venv/
@@ -10,3 +12,4 @@ htmlcov/
 *.egg-info/
 
 .compozy/
+.playwright-mcp

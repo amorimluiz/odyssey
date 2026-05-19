@@ -38,3 +38,6 @@ addopts = [
   "--cov-report=term-missing",
   "--cov-fail-under=80",
 ]
+markers = [
+  "integration: integration tests that validate generated QA artifacts and cross-file invariants",
+]
