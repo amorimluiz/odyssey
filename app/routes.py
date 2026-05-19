@@ -4,16 +4,17 @@ from __future__ import annotations
 
 from hmac import compare_digest
 import logging
+import uuid
 from typing import Protocol
 
 from fasthtml.common import Button, Div, FastHTML, Form, Input, Label, P
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 
-from app.auth import clear_session_cookie, current_user, hash_password, issue_token, require_user, set_session_cookie, verify_password
-from app.components import base_layout, error_fragment, house_card, house_submit_form, vote_button
+from app.auth import clear_session_cookie, current_user, hash_password, issue_token, require_admin, require_user, set_session_cookie, verify_password
+from app.components import admin_panel, base_layout, error_fragment, house_card, house_submit_form, invite_link_fragment, vote_button
 from app.config import get_settings
-from app.db import count_votes_for_house, get_db, get_house_by_external_id, get_house_by_id, get_invite_token, get_user_by_email, houses_ranked, insert_house, insert_user, toggle_vote, user_voted_house_ids
+from app.db import count_votes_for_house, get_db, get_house_by_external_id, get_house_by_id, get_invite_token, get_user_by_email, houses_ranked, insert_house, insert_user, list_users, set_invite_token, toggle_vote, user_voted_house_ids
 from app import scraper
 
 logger = logging.getLogger(__name__)
@@ -244,3 +245,43 @@ def register_routes(app: FastHTML) -> None:
         is_voted = toggle_vote(db, int(user["sub"]), house_id)
         house["vote_count"] = count_votes_for_house(db, house_id)
         return vote_button(house, is_voted)
+
+    @app.get("/admin")
+    async def admin_page(request: Request):
+        admin_or_response = require_admin(request)
+        if isinstance(admin_or_response, Response):
+            return admin_or_response
+
+        db = get_db()
+        token = get_invite_token(db) or ""
+        members = list_users(db)
+        return base_layout(
+            admin_panel(invite_url=_invite_url(request, token), members=members),
+            request=request,
+            title="Admin",
+        )
+
+    @app.post("/admin/rotate-invite")
+    async def rotate_invite(request: Request):
+        admin_or_response = require_admin(request)
+        if isinstance(admin_or_response, Response):
+            return admin_or_response
+
+        db = get_db()
+        new_token = uuid.uuid4().hex
+        set_invite_token(db, new_token)
+        logger.info(
+            "event=invite_rotated admin_user_id=%s",
+            admin_or_response.get("sub"),
+        )
+        return invite_link_fragment(_invite_url(request, new_token))
+    def _invite_base_url(request: Request) -> str:
+        settings = get_settings()
+        if settings.base_url:
+            return settings.base_url.rstrip("/")
+        host = request.headers.get("host", "localhost")
+        scheme = request.url.scheme or "http"
+        return f"{scheme}://{host}"
+
+    def _invite_url(request: Request, token: str) -> str:
+        return f"{_invite_base_url(request)}/invite/{token}"

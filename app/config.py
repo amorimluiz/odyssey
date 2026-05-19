@@ -14,6 +14,7 @@ class Settings:
     db_path: str
     secret_key: str
     admin_email: str | None
+    base_url: str | None
 
 
 @lru_cache(maxsize=1)
@@ -24,8 +25,9 @@ def get_settings() -> Settings:
     db_path = os.getenv("DB_PATH", "./app.db")
     secret_key = os.getenv("SECRET_KEY")
     admin_email = os.getenv("ADMIN_EMAIL") or None
+    base_url = os.getenv("BASE_URL") or None
 
     if not secret_key:
         raise ValueError("SECRET_KEY environment variable is required")
 
-    return Settings(db_path=db_path, secret_key=secret_key, admin_email=admin_email)
+    return Settings(db_path=db_path, secret_key=secret_key, admin_email=admin_email, base_url=base_url)

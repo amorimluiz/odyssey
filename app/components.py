@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fasthtml.common import A, Body, Button, Div, Form, H1, H2, Head, Header, Html, Img, Input, Nav, P, Script, Span, Title
+from fasthtml.common import A, Body, Button, Div, Form, H1, H2, Head, Header, Html, Img, Input, Nav, P, Script, Span, Table, Tbody, Td, Th, Thead, Title, Tr
 from starlette.requests import Request
 
 from app.auth import current_user
@@ -118,6 +118,66 @@ def house_card(house: dict, *, is_voted: bool = False, highlight: bool = False, 
         id=f'house-{house.get("id")}',
         cls=card_classes,
         **attrs,
+    )
+
+
+def invite_link_fragment(invite_url: str) -> Div:
+    """Render current invite URL plus copy and rotate controls."""
+    return Div(
+        P("Current invite link"),
+        Input(
+            id="invite-link-input",
+            type="text",
+            value=invite_url,
+            readonly=True,
+        ),
+        Div(
+            Button(
+                "Copy link",
+                type="button",
+                onclick="copyInviteLink()",
+            ),
+            Button(
+                "Rotate invite link",
+                type="button",
+                hx_post="/admin/rotate-invite",
+                hx_target="#invite-link-fragment",
+                hx_swap="outerHTML",
+            ),
+            cls="admin-actions",
+        ),
+        Script(
+            """
+function copyInviteLink() {
+  const el = document.getElementById("invite-link-input");
+  if (!el) return;
+  el.select();
+  navigator.clipboard.writeText(el.value);
+}
+""".strip()
+        ),
+        id="invite-link-fragment",
+    )
+
+
+def admin_panel(*, invite_url: str, members: list[dict]) -> Div:
+    """Render admin panel with invite controls and read-only member list."""
+    rows = [
+        Tr(
+            Td(member.get("name", "")),
+            Td(member.get("email", "")),
+            Td(member.get("created_at", "")),
+        )
+        for member in members
+    ]
+
+    return Div(
+        invite_link_fragment(invite_url),
+        H2("Members"),
+        Table(
+            Thead(Tr(Th("Name"), Th("Email"), Th("Joined"))),
+            Tbody(*rows),
+        ),
     )
 
 

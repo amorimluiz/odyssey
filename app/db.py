@@ -233,3 +233,15 @@ def set_invite_token(db: Database, token: str) -> None:
         ["invite_token", token],
     )
     db.conn.commit()
+
+
+def list_users(db: Database) -> list[dict[str, Any]]:
+    """Return users sorted by join date ascending."""
+    rows = db.query(
+        """
+        SELECT id, name, email, role, created_at
+        FROM users
+        ORDER BY created_at ASC
+        """
+    )
+    return [dict(row) for row in rows]
