@@ -30,7 +30,14 @@ def nav_header(request: Request | None) -> Header:
     else:
         if user.get("role") == "admin":
             links.append(A("Admin", href="/admin"))
-        links.append(A("Logout", href="/logout"))
+        links.append(
+            Form(
+                Button("Logout", type="submit", cls="nav-logout-button"),
+                method="post",
+                action="/logout",
+                cls="nav-logout-form",
+            )
+        )
 
     return Header(
         Nav(*links, cls="nav-links"),

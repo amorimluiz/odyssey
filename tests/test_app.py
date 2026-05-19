@@ -46,6 +46,10 @@ def test_nav_header_admin_variant(monkeypatch) -> None:
     assert "Admin" in html
     assert "Logout" in html
     assert "Login" not in html
+    assert 'href="/logout"' not in html
+    assert 'method="post"' in html
+    assert 'action="/logout"' in html
+    assert '<form' in html
 
 
 def test_error_fragment_retryable_variant() -> None:

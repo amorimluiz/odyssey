@@ -32,7 +32,15 @@ def register_routes(app: FastHTML) -> None:
     def _html_response(body, request: Request, *, title: str, status_code: int = 200) -> HTMLResponse:
         return HTMLResponse(content=str(base_layout(body, request=request, title=title)), status_code=status_code)
 
-    def _register_form(token: str, *, disabled: bool, error_message: str | None = None, username: str = "") -> Div:
+    def _register_form(
+        token: str,
+        *,
+        disabled: bool,
+        error_message: str | None = None,
+        name: str = "",
+        username: str = "",
+        password: str = "",
+    ) -> Div:
         error_node = error_fragment(error_message) if error_message else None
         return Div(
             error_node,
@@ -44,11 +52,12 @@ def register_routes(app: FastHTML) -> None:
                     hx_trigger="input changed delay:300ms",
                     hx_target="#username",
                     hx_swap="outerHTML",
+                    value=name,
                 ),
                 Label("Username", fr="username", cls="form-label"),
                 Input(id="username", name="username", type="text", required=True, disabled=disabled, cls="text-input", value=username),
                 Label("Password", fr="password", cls="form-label"),
-                Input(id="password", name="password", type="password", required=True, disabled=disabled, cls="text-input"),
+                Input(id="password", name="password", type="password", required=True, disabled=disabled, cls="text-input", value=password),
                 Input(name="token", type="hidden", value=token),
                 Button("Create account", type="submit", disabled=disabled, cls="btn btn-primary"),
                 method="post",
@@ -114,11 +123,25 @@ def register_routes(app: FastHTML) -> None:
             return _html_response(body, request, title="Register", status_code=403)
 
         if len(password) < 8:
-            body = _register_form(token, disabled=False, error_message="Password must be at least 8 characters.", username=username)
+            body = _register_form(
+                token,
+                disabled=False,
+                error_message="Password must be at least 8 characters.",
+                name=name,
+                username=username,
+                password=password,
+            )
             return _html_response(body, request, title="Register", status_code=422)
 
         if get_user_by_username(db, username) is not None:
-            body = _register_form(token, disabled=False, error_message="This username is already taken — please choose a different one.", username=username)
+            body = _register_form(
+                token,
+                disabled=False,
+                error_message="This username is already taken — please choose a different one.",
+                name=name,
+                username=username,
+                password=password,
+            )
             return _html_response(body, request, title="Register", status_code=409)
 
         user_count = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]

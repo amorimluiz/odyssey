@@ -205,7 +205,37 @@ def test_register_duplicate_username_shows_error(monkeypatch, tmp_path) -> None:
     assert response.status_code == 409
     _assert_html_response(response)
     assert "This username is already taken — please choose a different one." in response.text
+    soup = BeautifulSoup(response.text, "html.parser")
+    assert soup.find("input", {"name": "name", "value": "Two"}) is not None
+    assert soup.find("input", {"name": "username", "value": "dup-user"}) is not None
+    assert soup.find("input", {"name": "password", "value": "anothervalue"}) is not None
+    assert soup.find("input", {"name": "token", "value": "invite-ok"}) is not None
     assert get_db()["users"].count == 1
+
+
+def test_register_duplicate_username_can_resubmit_with_same_token(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        _seed_invite("invite-ok")
+        client.post(
+            "/register",
+            data={"name": "One", "username": "dup-user", "password": "verysecure", "token": "invite-ok"},
+            follow_redirects=False,
+        )
+
+        duplicate_response = client.post(
+            "/register",
+            data={"name": "Two", "username": "dup-user", "password": "anothervalue", "token": "invite-ok"},
+        )
+        recovery_response = client.post(
+            "/register",
+            data={"name": "Two", "username": "dup-user-2", "password": "anothervalue", "token": "invite-ok"},
+            follow_redirects=False,
+        )
+
+    assert duplicate_response.status_code == 409
+    assert recovery_response.status_code == 303
+    assert recovery_response.headers["location"] == "/"
+    assert get_db()["users"].count == 2
 
 
 def test_register_first_user_is_admin(monkeypatch, tmp_path) -> None:
@@ -362,3 +392,56 @@ def test_logout_clears_cookie_and_redirects(monkeypatch, tmp_path) -> None:
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
     assert "max-age=0" in response.headers["set-cookie"].lower()
+
+
+def test_authenticated_header_logout_control_posts_to_logout(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        db = get_db()
+        init_schema(db)
+        insert_user(db, name="User", username="user", password_hash=hash_password("verysecure"), role="member")
+
+        login_response = client.post(
+            "/login",
+            data={"username": "user", "password": "verysecure"},
+            follow_redirects=False,
+        )
+        session_cookie = login_response.cookies.get("session")
+        assert session_cookie is not None
+
+        home_response = client.get("/", cookies={"session": session_cookie}, follow_redirects=False)
+
+    assert home_response.status_code == 200
+    soup = BeautifulSoup(home_response.text, "html.parser")
+    logout_form = soup.find("form", {"action": "/logout"})
+    assert logout_form is not None
+    assert (logout_form.get("method") or "").lower() == "post"
+    assert logout_form.find("button", string="Logout") is not None
+
+
+def test_login_logout_login_again_round_trip(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        db = get_db()
+        init_schema(db)
+        insert_user(db, name="User", username="user", password_hash=hash_password("verysecure"), role="member")
+
+        first_login = client.post(
+            "/login",
+            data={"username": "user", "password": "verysecure"},
+            follow_redirects=False,
+        )
+        session_cookie = first_login.cookies.get("session")
+        assert session_cookie is not None
+
+        logout = client.post("/logout", cookies={"session": session_cookie}, follow_redirects=False)
+        relogin = client.post(
+            "/login",
+            data={"username": "user", "password": "verysecure"},
+            follow_redirects=False,
+        )
+
+    assert first_login.status_code == 303
+    assert logout.status_code == 303
+    assert logout.headers["location"] == "/login"
+    assert "max-age=0" in logout.headers["set-cookie"].lower()
+    assert relogin.status_code == 303
+    assert relogin.headers["location"] == "/"
