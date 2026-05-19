@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "group-house-voting"
+version = "0.1.0"
+description = "Group House Voting MVP"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "python-fasthtml",
+  "sqlite-utils",
+  "httpx",
+  "pyjwt",
+  "passlib[bcrypt]",
+  "beautifulsoup4",
+  "python-dotenv",
+  "uvicorn",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest",
+  "pytest-asyncio",
+  "pytest-cov",
+  "pytest-httpx",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+  "--cov=app",
+  "--cov-report=term-missing",
+  "--cov-fail-under=80",
+]

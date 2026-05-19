@@ -1,1 +1,10 @@
-.compozy
+.env
+*.db
+__pycache__/
+.pytest_cache/
+.venv/
+.coverage
+htmlcov/
+*.pyc
+
+*.egg-info/
