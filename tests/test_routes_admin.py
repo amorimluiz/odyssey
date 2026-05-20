@@ -6,7 +6,8 @@ import logging
 from starlette.testclient import TestClient
 
 from app.auth import hash_password, issue_token
-from app.db import get_db, get_invite_token, init_schema, insert_user, set_invite_token
+from app.db import get_db, get_invite_token, init_schema, insert_house, insert_user, set_invite_token
+from app.scraper import OGData
 
 
 def _build_client(monkeypatch, tmp_path, *, base_url: str | None = None) -> TestClient:
@@ -179,6 +180,179 @@ def test_post_rotate_invite_member_forbidden(monkeypatch, tmp_path) -> None:
         response = client.post("/admin/rotate-invite")
 
     assert response.status_code == 403
+
+
+def test_post_refresh_metadata_unauthenticated_redirects_to_login(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        response = client.post("/admin/refresh-metadata", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/login"
+
+
+def test_post_refresh_metadata_member_forbidden(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        user_id = _make_user(
+            name="Member",
+            username="member",
+            role="member",
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        _set_session(client, user_id, "member")
+
+        response = client.post("/admin/refresh-metadata")
+
+    assert response.status_code == 403
+
+
+def test_post_refresh_metadata_scans_missing_rows_and_continues_after_failure(monkeypatch, tmp_path, caplog) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        admin_id = _make_user(
+            name="Admin",
+            username="admin-user",
+            role="admin",
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        db = get_db()
+        init_schema(db)
+        insert_house(
+            db,
+            source="airbnb",
+            external_id="complete",
+            url="https://www.airbnb.com/rooms/complete",
+            title="Complete",
+            image_url="https://example.com/complete.jpg",
+            description="Complete description",
+            price="$100",
+            submitted_by=admin_id,
+            submitted_at="2026-01-01T00:00:00+00:00",
+        )
+        insert_house(
+            db,
+            source="booking",
+            external_id="missing-price",
+            url="https://www.booking.com/hotel/br/missing-price.html",
+            title="Missing price",
+            image_url="https://example.com/price.jpg",
+            description="Has description",
+            price=None,
+            submitted_by=admin_id,
+            submitted_at="2026-01-02T00:00:00+00:00",
+        )
+        insert_house(
+            db,
+            source="booking",
+            external_id="missing-image",
+            url="https://www.booking.com/hotel/br/missing-image.html",
+            title="Missing image",
+            image_url="",
+            description="Has description",
+            price="$200",
+            submitted_by=admin_id,
+            submitted_at="2026-01-03T00:00:00+00:00",
+        )
+        insert_house(
+            db,
+            source="airbnb",
+            external_id="missing-description",
+            url="https://www.airbnb.com/rooms/missing-description",
+            title="Missing description",
+            image_url="https://example.com/desc.jpg",
+            description=" ",
+            price="$300",
+            submitted_by=admin_id,
+            submitted_at="2026-01-04T00:00:00+00:00",
+        )
+        _set_session(client, admin_id, "admin")
+
+        calls: list[str] = []
+
+        async def fake_fetch(url: str):
+            calls.append(url)
+            if "missing-price" in url:
+                return None
+            if "missing-image" in url:
+                return OGData(title="Updated", image_url="https://example.com/new.jpg", description="Updated description", price="R$ 900")
+            return OGData(title="Updated", image_url="https://example.com/desc-new.jpg", description="Updated description", price="$400")
+
+        import app.routes as routes_module
+
+        monkeypatch.setattr(routes_module.scraper, "fetch_og", fake_fetch)
+
+        with caplog.at_level(logging.INFO):
+            response = client.post("/admin/refresh-metadata")
+
+    assert response.status_code == 200
+    assert 'id="metadata-refresh-fragment"' in response.text
+    assert "Scanned 3 houses. Updated 2. Failed 1." in response.text
+    assert len(calls) == 3
+    assert "https://www.airbnb.com/rooms/complete" not in calls
+    assert "event=metadata_refresh" in caplog.text
+    assert "scanned=3" in caplog.text
+    assert "updated=2" in caplog.text
+    assert "failed=1" in caplog.text
+
+    rows = list(db.query("SELECT external_id, image_url, description, price FROM houses ORDER BY submitted_at ASC"))
+    rows_by_external_id = {row["external_id"]: row for row in rows}
+    assert rows_by_external_id["complete"]["price"] == "$100"
+    assert rows_by_external_id["missing-price"]["price"] is None
+    assert rows_by_external_id["missing-image"]["image_url"] == "https://example.com/new.jpg"
+    assert rows_by_external_id["missing-image"]["price"] == "$200"
+    assert rows_by_external_id["missing-description"]["description"] == "Updated description"
+    assert rows_by_external_id["missing-description"]["price"] == "$300"
+
+
+def test_post_refresh_metadata_preserves_existing_fields_and_fills_only_missing_price(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        admin_id = _make_user(
+            name="Admin",
+            username="admin-user",
+            role="admin",
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        db = get_db()
+        init_schema(db)
+        insert_house(
+            db,
+            source="booking",
+            external_id="keep-price",
+            url="https://www.booking.com/hotel/br/keep-price.html",
+            title="Original title",
+            image_url="https://example.com/original.jpg",
+            description="Original description",
+            price=None,
+            submitted_by=admin_id,
+            submitted_at="2026-01-02T00:00:00+00:00",
+        )
+        _set_session(client, admin_id, "admin")
+
+        async def fake_fetch(url: str):
+            assert url == "https://www.booking.com/hotel/br/keep-price.html"
+            return OGData(
+                title="Replacement title",
+                image_url="https://example.com/replacement.jpg",
+                description="Replacement description",
+                price="R$ 777",
+            )
+
+        import app.routes as routes_module
+
+        monkeypatch.setattr(routes_module.scraper, "fetch_og", fake_fetch)
+
+        response = client.post("/admin/refresh-metadata")
+
+    assert response.status_code == 200
+    assert "Scanned 1 houses. Updated 1. Failed 0." in response.text
+    row = list(
+        db.query(
+            "SELECT title, image_url, description, price FROM houses WHERE external_id = ?",
+            ["keep-price"],
+        )
+    )[0]
+    assert row["title"] == "Original title"
+    assert row["image_url"] == "https://example.com/original.jpg"
+    assert row["description"] == "Original description"
+    assert row["price"] == "R$ 777"
 
 
 def test_admin_panel_shows_username_column_not_email(monkeypatch, tmp_path) -> None:

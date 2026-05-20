@@ -9,6 +9,7 @@ from app.db import (
     get_house_by_external_id,
     get_invite_token,
     get_user_by_username,
+    houses_missing_metadata,
     houses_ranked,
     init_schema,
     insert_house,
@@ -16,8 +17,10 @@ from app.db import (
     set_invite_token,
     slugify,
     toggle_vote,
+    update_house_missing_metadata,
 )
 from app.errors import DuplicateHouseError
+from app.scraper import OGData
 
 
 def test_init_schema_creates_tables_and_is_idempotent() -> None:
@@ -147,6 +150,166 @@ def test_get_house_by_external_id_and_invite_token_helpers() -> None:
     assert get_invite_token(db) is None
     set_invite_token(db, "token-123")
     assert get_invite_token(db) == "token-123"
+
+
+def test_houses_missing_metadata_selects_null_and_empty_fields() -> None:
+    db = Database(memory=True)
+    init_schema(db)
+    user_id = insert_user(db, name="User", username="user", password_hash="hash")
+
+    complete = insert_house(
+        db,
+        source="airbnb",
+        external_id="complete",
+        url="https://www.airbnb.com/rooms/complete",
+        title="Complete",
+        image_url="https://example.com/complete.jpg",
+        description="Complete description",
+        price="$100",
+        submitted_by=user_id,
+        submitted_at="2026-01-03T00:00:00+00:00",
+    )
+    missing_price = insert_house(
+        db,
+        source="booking",
+        external_id="missing-price",
+        url="https://www.booking.com/hotel/br/missing-price.html",
+        title="Missing price",
+        image_url="https://example.com/price.jpg",
+        description="Has description",
+        price=None,
+        submitted_by=user_id,
+        submitted_at="2026-01-01T00:00:00+00:00",
+    )
+    missing_image = insert_house(
+        db,
+        source="booking",
+        external_id="missing-image",
+        url="https://www.booking.com/hotel/br/missing-image.html",
+        title="Missing image",
+        image_url="",
+        description="Has description",
+        price="$200",
+        submitted_by=user_id,
+        submitted_at="2026-01-02T00:00:00+00:00",
+    )
+    missing_description = insert_house(
+        db,
+        source="airbnb",
+        external_id="missing-description",
+        url="https://www.airbnb.com/rooms/missing-description",
+        title="Missing description",
+        image_url="https://example.com/desc.jpg",
+        description="   ",
+        price="$300",
+        submitted_by=user_id,
+        submitted_at="2026-01-04T00:00:00+00:00",
+    )
+
+    rows = houses_missing_metadata(db)
+
+    assert [row["id"] for row in rows] == [missing_price, missing_image, missing_description]
+    assert complete not in [row["id"] for row in rows]
+
+
+def test_update_house_missing_metadata_fills_missing_fields() -> None:
+    db = Database(memory=True)
+    init_schema(db)
+    user_id = insert_user(db, name="User", username="user", password_hash="hash")
+    house_id = insert_house(
+        db,
+        source="booking",
+        external_id="partial",
+        url="https://www.booking.com/hotel/br/partial.html",
+        title="Partial",
+        image_url=None,
+        description="",
+        price=None,
+        submitted_by=user_id,
+    )
+
+    changed = update_house_missing_metadata(
+        db,
+        house_id,
+        OGData(
+            title="Fresh title",
+            image_url="https://example.com/fresh.jpg",
+            description="Fresh description",
+            price="R$ 500",
+        ),
+    )
+    row = get_house_by_external_id(db, "booking", "partial")
+
+    assert changed is True
+    assert row is not None
+    assert row["image_url"] == "https://example.com/fresh.jpg"
+    assert row["description"] == "Fresh description"
+    assert row["price"] == "R$ 500"
+
+
+def test_update_house_missing_metadata_preserves_existing_non_empty_fields() -> None:
+    db = Database(memory=True)
+    init_schema(db)
+    user_id = insert_user(db, name="User", username="user", password_hash="hash")
+    house_id = insert_house(
+        db,
+        source="airbnb",
+        external_id="keep",
+        url="https://www.airbnb.com/rooms/keep",
+        title="Keep title",
+        image_url="https://example.com/original.jpg",
+        description="Original description",
+        price="$111",
+        submitted_by=user_id,
+    )
+
+    changed = update_house_missing_metadata(
+        db,
+        house_id,
+        OGData(
+            title="Replacement title",
+            image_url="https://example.com/replacement.jpg",
+            description="Replacement description",
+            price="$999",
+        ),
+    )
+    row = get_house_by_external_id(db, "airbnb", "keep")
+
+    assert changed is False
+    assert row is not None
+    assert row["image_url"] == "https://example.com/original.jpg"
+    assert row["description"] == "Original description"
+    assert row["price"] == "$111"
+
+
+def test_update_house_missing_metadata_returns_false_when_no_change() -> None:
+    db = Database(memory=True)
+    init_schema(db)
+    user_id = insert_user(db, name="User", username="user", password_hash="hash")
+    house_id = insert_house(
+        db,
+        source="booking",
+        external_id="unchanged",
+        url="https://www.booking.com/hotel/br/unchanged.html",
+        title="Unchanged",
+        image_url=None,
+        description=None,
+        price=None,
+        submitted_by=user_id,
+    )
+
+    changed = update_house_missing_metadata(
+        db,
+        house_id,
+        OGData(title="Only title", image_url=None, description=None, price=None),
+    )
+    row = get_house_by_external_id(db, "booking", "unchanged")
+
+    assert changed is False
+    assert row is not None
+    assert row["image_url"] is None
+    assert row["description"] is None
+    assert row["price"] is None
 
 
 def test_file_backed_persistence_and_constraints(tmp_path) -> None:

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from hmac import compare_digest
+from dataclasses import dataclass
 import logging
+from time import perf_counter
 import uuid
 from typing import Protocol
 
@@ -12,12 +14,21 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
 from app.auth import clear_session_cookie, current_user, hash_password, issue_token, require_admin, require_user, set_session_cookie, verify_password
-from app.components import admin_panel, base_layout, error_fragment, house_card, house_submit_form, invite_link_fragment, vote_button
+from app.components import admin_panel, base_layout, error_fragment, house_card, house_submit_form, invite_link_fragment, metadata_refresh_fragment, vote_button
 from app.config import get_settings
-from app.db import count_users, count_votes_for_house, get_db, get_house_by_external_id, get_house_by_id, get_invite_token, get_user_by_username, houses_ranked, insert_house, insert_user, list_users, set_invite_token, slugify, toggle_vote, user_voted_house_ids
+from app.db import count_users, count_votes_for_house, get_db, get_house_by_external_id, get_house_by_id, get_invite_token, get_user_by_username, houses_missing_metadata, houses_ranked, insert_house, insert_user, list_users, set_invite_token, slugify, toggle_vote, update_house_missing_metadata, user_voted_house_ids
 from app import scraper
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class MetadataRefreshResult:
+    """Count of scanned, updated, and failed metadata refresh rows."""
+
+    scanned: int
+    updated: int
+    failed: int
 
 
 class RoutesRegistrar(Protocol):
@@ -254,7 +265,7 @@ def register_routes(app: FastHTML) -> None:
             existing_with_votes["vote_count"] = 0
             return (Div(), house_card(existing_with_votes, highlight=True, oob=True))
 
-        og_data = await scraper.fetch_og(parsed.normalized)
+        og_data = await scraper.fetch_og(parsed.fetch_url)
         fetch_meta = scraper.last_fetch_meta()
         if og_data is None:
             logger.error(
@@ -344,6 +355,68 @@ def register_routes(app: FastHTML) -> None:
             admin_or_response.get("sub"),
         )
         return invite_link_fragment(_invite_url(request, new_token))
+
+    @app.post("/admin/refresh-metadata")
+    async def refresh_metadata(request: Request):
+        admin_or_response = require_admin(request)
+        if isinstance(admin_or_response, Response):
+            return admin_or_response
+
+        db = get_db()
+        rows = houses_missing_metadata(db)
+        result = MetadataRefreshResult(scanned=len(rows), updated=0, failed=0)
+        started_at = perf_counter()
+
+        for row in rows:
+            try:
+                og_data = await scraper.fetch_og(str(row["url"]))
+            except Exception:
+                result = MetadataRefreshResult(
+                    scanned=result.scanned,
+                    updated=result.updated,
+                    failed=result.failed + 1,
+                )
+                logger.exception(
+                    "event=metadata_refresh_fetch_error house_id=%s source=%s",
+                    row.get("id"),
+                    row.get("source"),
+                )
+                continue
+
+            if og_data is None:
+                result = MetadataRefreshResult(
+                    scanned=result.scanned,
+                    updated=result.updated,
+                    failed=result.failed + 1,
+                )
+                continue
+
+            if update_house_missing_metadata(db, int(row["id"]), og_data):
+                result = MetadataRefreshResult(
+                    scanned=result.scanned,
+                    updated=result.updated + 1,
+                    failed=result.failed,
+                )
+
+        duration_ms = int((perf_counter() - started_at) * 1000)
+        logger.info(
+            "event=metadata_refresh scanned=%s updated=%s failed=%s duration_ms=%s admin_user_id=%s",
+            result.scanned,
+            result.updated,
+            result.failed,
+            duration_ms,
+            admin_or_response.get("sub"),
+        )
+        return HTMLResponse(
+            content=to_xml(
+                metadata_refresh_fragment(
+                    scanned=result.scanned,
+                    updated=result.updated,
+                    failed=result.failed,
+                )
+            ),
+        )
+
     def _invite_base_url(request: Request) -> str:
         settings = get_settings()
         if settings.base_url:

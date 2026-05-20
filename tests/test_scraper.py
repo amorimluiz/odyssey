@@ -5,7 +5,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.scraper import OGData, _parse_og_markup, fetch_og, parse_url
+from app.scraper import OGData, _parse_og_markup, fetch_og, last_fetch_meta, parse_url
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
@@ -29,6 +29,7 @@ def test_parse_airbnb_example_url_contract() -> None:
     assert parsed.source == "airbnb"
     assert parsed.external_id == "32311963"
     assert parsed.normalized == "https://www.airbnb.com/rooms/32311963"
+    assert parsed.fetch_url == "https://www.airbnb.com/rooms/32311963"
 
 
 def test_parse_booking_example_url_contract() -> None:
@@ -40,6 +41,13 @@ def test_parse_booking_example_url_contract() -> None:
     assert parsed.source == "booking"
     assert parsed.external_id == "villa-inn-economic"
     assert parsed.normalized == "https://www.booking.com/hotel/br/villa-inn-economic.html"
+    assert parsed.fetch_url == (
+        "https://www.booking.com/hotel/br/villa-inn-economic.html"
+        "?checkin=2026-12-30&checkout=2027-01-03&group_adults=11&group_children=0"
+        "&highlighted_blocks=691479801_285025048_5_1_0%2C691479801_285025048_3_1_0%2C691479801_285025048_3_1_0"
+        "&matching_block_id=691479801_285025048_5_1_0&no_rooms=5&room1=A%2CA&room2=A%2CA&room3=A%2CA"
+        "&room4=A%2CA&room5=A%2CA%2CA&sb_price_type=total&type=total"
+    )
 
 
 def test_parse_airbnb_deduplicates_tracking_params() -> None:
@@ -55,12 +63,39 @@ def test_parse_airbnb_deduplicates_tracking_params() -> None:
     assert parsed_canonical == parsed_tracking
 
 
+def test_parse_booking_preserves_allowlisted_query_params_for_fetch_url() -> None:
+    parsed = parse_url(
+        "https://www.booking.com/hotel/br/villa-inn-economic.html"
+        "?checkin=2026-08-01&checkout=2026-08-03&group_adults=2&no_rooms=1&selected_currency=BRL"
+        "&utm_source=newsletter"
+    )
+
+    assert parsed is not None
+    assert parsed.normalized == "https://www.booking.com/hotel/br/villa-inn-economic.html"
+    assert (
+        parsed.fetch_url
+        == "https://www.booking.com/hotel/br/villa-inn-economic.html"
+        "?checkin=2026-08-01&checkout=2026-08-03&group_adults=2&no_rooms=1&selected_currency=BRL"
+    )
+
+
+def test_parse_booking_strips_unsupported_tracking_params_from_fetch_url() -> None:
+    parsed = parse_url(
+        "https://www.booking.com/hotel/br/villa-inn-economic.html"
+        "?utm_source=ad&affiliate_id=123&checkin=2026-08-01"
+    )
+
+    assert parsed is not None
+    assert parsed.fetch_url == "https://www.booking.com/hotel/br/villa-inn-economic.html?checkin=2026-08-01"
+
+
 def test_parse_airbnb_strips_fragment() -> None:
     parsed = parse_url("https://www.airbnb.com/rooms/32311963#photos")
 
     assert parsed is not None
     assert parsed.external_id == "32311963"
     assert parsed.normalized == "https://www.airbnb.com/rooms/32311963"
+    assert parsed.fetch_url == "https://www.airbnb.com/rooms/32311963"
 
 
 @pytest.mark.parametrize(
@@ -110,13 +145,52 @@ def test_og_parser_full_data_fixture() -> None:
     )
 
 
-def test_og_parser_title_only_fixture() -> None:
+def test_og_parser_jsonld_price_fixture() -> None:
+    markup = (FIXTURE_DIR / "booking_jsonld_price.html").read_text(encoding="utf-8")
+
+    parsed = _parse_og_markup(markup)
+
+    assert parsed == OGData(
+        title="Villa Inn Economic",
+        image_url=None,
+        description=None,
+        price="R$ 1.250",
+    )
+
+
+def test_og_parser_meta_price_fixture() -> None:
+    markup = (FIXTURE_DIR / "booking_meta_price.html").read_text(encoding="utf-8")
+
+    parsed = _parse_og_markup(markup)
+
+    assert parsed == OGData(
+        title="Villa Inn Economic",
+        image_url=None,
+        description=None,
+        price="R$ 1.250",
+    )
+
+
+def test_og_parser_og_description_fixture() -> None:
     markup = (FIXTURE_DIR / "booking_listing.html").read_text(encoding="utf-8")
 
     parsed = _parse_og_markup(markup)
 
     assert parsed == OGData(
         title="Villa Inn Economic",
+        image_url=None,
+        description=None,
+        price=None,
+    )
+
+
+def test_og_parser_visible_body_price_is_ignored() -> None:
+    markup = (FIXTURE_DIR / "booking_visible_price_only.html").read_text(encoding="utf-8")
+
+    parsed = _parse_og_markup(markup)
+
+    assert parsed == OGData(
+        title="Visible Price Only",
         image_url=None,
         description=None,
         price=None,
@@ -144,6 +218,11 @@ async def test_fetch_og_success_with_mocked_http_response(
         description="Vista para o mar, 4 quartos. R$ 1.250 por noite",
         price="R$ 1.250 por noite",
     )
+    meta = last_fetch_meta()
+    assert meta["status"] == 200
+    assert meta["price_found"] is True
+    assert meta["failure_reason"] is None
+    assert meta["fetch_url_host"] == "www.airbnb.com"
 
 
 @pytest.mark.asyncio
@@ -151,6 +230,30 @@ async def test_fetch_og_non_2xx_returns_none(httpx_mock) -> None:
     httpx_mock.add_response(status_code=403, text="forbidden")
 
     assert await fetch_og("https://www.booking.com/hotel/br/villa-inn-economic.html") is None
+    meta = last_fetch_meta()
+    assert meta["status"] == 403
+    assert meta["failure_reason"] == "non_2xx"
+    assert meta["source"] == "booking"
+
+
+@pytest.mark.asyncio
+async def test_fetch_og_success_without_price_records_missing_metadata(httpx_mock) -> None:
+    markup = (FIXTURE_DIR / "booking_listing.html").read_text(encoding="utf-8")
+    httpx_mock.add_response(status_code=200, text=markup)
+
+    parsed = await fetch_og("https://www.booking.com/hotel/br/villa-inn-economic.html")
+
+    assert parsed == OGData(
+        title="Villa Inn Economic",
+        image_url=None,
+        description=None,
+        price=None,
+    )
+    meta = last_fetch_meta()
+    assert meta["status"] == 200
+    assert meta["price_found"] is False
+    assert meta["failure_reason"] == "missing_metadata"
+    assert meta["source"] == "booking"
 
 
 @pytest.mark.asyncio
@@ -158,6 +261,9 @@ async def test_fetch_og_timeout_returns_none(httpx_mock) -> None:
     httpx_mock.add_exception(httpx.ReadTimeout("timeout"))
 
     assert await fetch_og("https://www.booking.com/hotel/br/villa-inn-economic.html") is None
+    meta = last_fetch_meta()
+    assert meta["failure_reason"] == "timeout"
+    assert meta["price_found"] is False
 
 
 @pytest.mark.asyncio

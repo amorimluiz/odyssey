@@ -167,6 +167,54 @@ def get_house_by_id(db: Database, house_id: int) -> dict[str, Any] | None:
     return dict(rows[0]) if rows else None
 
 
+def houses_missing_metadata(db: Database) -> list[dict[str, Any]]:
+    """Return houses missing price, image URL, or description metadata."""
+    rows = db.query(
+        """
+        SELECT *
+        FROM houses
+        WHERE COALESCE(TRIM(price), '') = ''
+           OR COALESCE(TRIM(image_url), '') = ''
+           OR COALESCE(TRIM(description), '') = ''
+        ORDER BY submitted_at ASC, id ASC
+        """
+    )
+    return [dict(row) for row in rows]
+
+
+def update_house_missing_metadata(db: Database, house_id: int, og_data) -> bool:
+    """Fill only missing metadata fields on a house row."""
+    row = get_house_by_id(db, house_id)
+    if row is None:
+        return False
+
+    def _is_missing(value: Any) -> bool:
+        return value is None or (isinstance(value, str) and not value.strip())
+
+    def _clean(value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    updates: dict[str, Any] = {}
+    for field in ("image_url", "description", "price"):
+        if not _is_missing(row.get(field)):
+            continue
+        new_value = _clean(getattr(og_data, field, None))
+        if new_value is not None:
+            updates[field] = new_value
+
+    if not updates:
+        return False
+
+    assignments = ", ".join(f"{field} = ?" for field in updates)
+    params = list(updates.values()) + [house_id]
+    db.execute(f"UPDATE houses SET {assignments} WHERE id = ?", params)
+    db.conn.commit()
+    return True
+
+
 def count_votes_for_house(db: Database, house_id: int) -> int:
     """Return current vote count for a house id."""
     row = list(

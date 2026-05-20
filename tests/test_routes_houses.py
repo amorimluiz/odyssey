@@ -169,6 +169,59 @@ def test_post_houses_success_inserts_and_returns_card(monkeypatch, tmp_path) -> 
     assert rows[0]["external_id"] == "123456"
 
 
+def test_post_houses_booking_submission_uses_fetch_url_and_renders_price(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        user_id = _login_cookie(client)
+        import app.routes as routes_module
+
+        booking_url = (
+            "https://www.booking.com/hotel/br/villa-inn-economic.html"
+            "?checkin=2026-08-01&checkout=2026-08-03&group_adults=2&no_rooms=1&selected_currency=BRL"
+            "&utm_source=newsletter"
+        )
+        parsed = ParsedURL(
+            source="booking",
+            external_id="villa-inn-economic",
+            normalized="https://www.booking.com/hotel/br/villa-inn-economic.html",
+            fetch_url=(
+                "https://www.booking.com/hotel/br/villa-inn-economic.html"
+                "?checkin=2026-08-01&checkout=2026-08-03&group_adults=2&no_rooms=1&selected_currency=BRL"
+            ),
+        )
+        fetch_calls: list[str] = []
+
+        def fake_parse_url(url: str):
+            assert url == booking_url
+            return parsed
+
+        async def fake_fetch(url: str):
+            fetch_calls.append(url)
+            return OGData(
+                title="Villa Inn Economic",
+                image_url="https://example.com/villa.jpg",
+                description="Desc",
+                price="R$ 1.250",
+            )
+
+        monkeypatch.setattr(routes_module.scraper, "parse_url", fake_parse_url)
+        monkeypatch.setattr(routes_module.scraper, "fetch_og", fake_fetch)
+        monkeypatch.setattr(routes_module.scraper, "last_fetch_meta", lambda: {"status": 200, "elapsed_ms": 17})
+
+        response = client.post("/houses", data={"url": booking_url})
+
+    assert response.status_code == 200
+    assert "house-card-price" in response.text
+    assert "R$ 1.250" in response.text
+    assert fetch_calls == [parsed.fetch_url]
+    rows = list(get_db().query("SELECT submitted_by, url, price, source, external_id FROM houses"))
+    assert len(rows) == 1
+    assert rows[0]["url"] == parsed.normalized
+    assert rows[0]["price"] == "R$ 1.250"
+    assert rows[0]["source"] == "booking"
+    assert rows[0]["external_id"] == "villa-inn-economic"
+    assert int(rows[0]["submitted_by"]) == user_id
+
+
 def test_post_houses_duplicate_highlight_no_insert(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
         user_id = _login_cookie(client)
@@ -185,12 +238,26 @@ def test_post_houses_duplicate_highlight_no_insert(monkeypatch, tmp_path) -> Non
             submitted_by=user_id,
         )
 
+        import app.routes as routes_module
+
+        fetch_called = False
+
+        async def fake_fetch(_url: str):
+            nonlocal fetch_called
+            fetch_called = True
+            raise AssertionError("fetch_og should not be called for duplicate submissions")
+
+        monkeypatch.setattr(routes_module.scraper, "fetch_og", fake_fetch)
+
         response = client.post("/houses", data={"url": "https://www.airbnb.com/rooms/999?x=1"})
 
     assert response.status_code == 200
     assert 'hx-swap-oob="true"' in response.text
     assert f'id="house-{house_id}"' in response.text
+    assert fetch_called is False
     assert get_db()["houses"].count == 1
+    row = list(get_db().query("SELECT price FROM houses WHERE id = ?", [house_id]))[0]
+    assert row["price"] is None
 
 
 def test_post_houses_og_failure_returns_502_and_logs(monkeypatch, tmp_path, caplog) -> None:
@@ -254,7 +321,12 @@ def test_submission_pipeline_call_order(monkeypatch, tmp_path) -> None:
 
         def fake_parse_url(_url: str):
             calls.append("parse")
-            return ParsedURL(source="airbnb", external_id="123", normalized="https://www.airbnb.com/rooms/123")
+            return ParsedURL(
+                source="airbnb",
+                external_id="123",
+                normalized="https://www.airbnb.com/rooms/123",
+                fetch_url="https://www.airbnb.com/rooms/123",
+            )
 
         def fake_get_house_by_external_id(*_args, **_kwargs):
             calls.append("dedupe")
