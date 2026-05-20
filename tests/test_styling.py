@@ -7,7 +7,7 @@ from starlette.requests import Request
 from starlette.testclient import TestClient
 
 from app.auth import hash_password, issue_token
-from app.components import base_layout, error_fragment, house_card, nav_header, vote_button
+from app.components import base_layout, error_fragment, house_card, house_manual_form, house_modal_clear, house_modal_shell, house_submit_form, nav_header, vote_button
 from app.db import get_db, init_schema, insert_user, set_invite_token
 
 HEX_RE = re.compile(r"#[0-9a-fA-F]{6}")
@@ -48,6 +48,112 @@ def test_house_card_has_documented_classes() -> None:
     assert "house-card-source" in html
     assert "house-card-image-placeholder" in html
     assert "Abrir anúncio" in html
+    assert "Editar" in html
+    assert 'hx-on-click="window.__houseModalTrigger = this"' in html
+
+
+def test_house_card_renders_manual_badge_and_admin_actions() -> None:
+    html = repr(
+        house_card(
+            {
+                "id": 7,
+                "source": "manual",
+                "url": "https://example.com/manual",
+                "title": "Casa manual",
+                "image_url": None,
+                "description": "Desc",
+                "price": "$123",
+                "vote_count": 0,
+            },
+            can_delete=True,
+        )
+    )
+
+    assert "Manual" in html
+    assert "badge-source-manual" in html
+    assert 'hx-get="/houses/7/edit"' in html
+    assert "Editar" in html
+    assert 'hx-on-click="window.__houseModalTrigger = this"' in html
+    assert 'hx-delete="/houses/7"' in html
+    assert "Excluir" in html
+
+
+def test_house_submit_form_exposes_manual_entry_point_and_modal_host() -> None:
+    html = repr(house_submit_form())
+
+    assert "Adicionar casa" in html
+    assert "Cadastrar manualmente" in html
+    assert 'hx-get="/houses/manual/new"' in html
+    assert 'hx-target="#house-modal"' in html
+    assert 'id="house-modal"' in html
+    assert 'hx-on-click="window.__houseModalTrigger = this"' in html
+
+
+def test_house_manual_form_contains_expected_fields() -> None:
+    html = repr(
+        house_manual_form(
+            action="/houses/manual",
+            method="post",
+            target="#house-list",
+            swap="afterbegin",
+            submit_label="Cadastrar casa",
+        )
+    )
+
+    for field_name in ["title", "url", "image_url", "description", "price"]:
+        assert f'name="{field_name}"' in html
+    assert 'hx-post="/houses/manual"' in html
+    assert 'hx-target="#house-list"' in html
+    assert "Cadastrar casa" in html
+
+
+def test_house_manual_form_edit_mode_prefills_values() -> None:
+    html = repr(
+        house_manual_form(
+            action="/houses/7",
+            method="put",
+            target="#house-7",
+            swap="outerHTML",
+            submit_label="Salvar alterações",
+            house={
+                "title": "Casa existente",
+                "url": "https://example.com/existing",
+                "image_url": "https://example.com/image.jpg",
+                "description": "Descrição atual",
+                "price": "$222",
+            },
+        )
+    )
+
+    assert 'hx-put="/houses/7"' in html
+    assert 'hx-target="#house-7"' in html
+    assert 'value="Casa existente"' in html
+    assert 'value="https://example.com/existing"' in html
+    assert 'value="https://example.com/image.jpg"' in html
+    assert 'value="Descrição atual"' in html
+    assert 'value="$222"' in html
+
+
+def test_house_modal_shell_has_dialog_semantics() -> None:
+    html = repr(house_modal_shell("Editar casa", house_manual_form(action="/houses/1", method="put", target="#house-1", swap="outerHTML", submit_label="Salvar")))
+
+    assert 'id="house-modal"' in html
+    assert 'role="dialog"' in html
+    assert 'aria-modal="true"' in html
+    assert 'aria-labelledby="house-modal-title"' in html
+    assert "Editar casa" in html
+    assert 'tabindex="-1"' in html
+    assert 'autofocus' in html
+    assert "hx-on--after-swap" in html
+    assert "hx-on-keydown" in html
+
+
+def test_house_modal_clear_restores_focus_on_swap() -> None:
+    html = repr(house_modal_clear())
+
+    assert 'id="house-modal"' in html
+    assert 'hx-swap-oob="true"' in html
+    assert "window.__houseModalTrigger?.focus?.()" in html
 
 
 def test_vote_button_toggled_class_and_aria_pressed() -> None:
@@ -189,6 +295,16 @@ def test_css_defines_required_design_tokens() -> None:
 
     assert ".house-card-vote-btn.is-voted" in css
     assert "var(--color-success)" in css
+    for selector in [
+        ".house-modal",
+        ".house-modal-panel",
+        ".house-card-actions",
+        ".house-card-action",
+        ".btn-danger",
+        ".badge-source-manual",
+        ".house-submit-stack",
+    ]:
+        assert selector in css
 
 
 def test_css_has_no_hex_literals_outside_root_block() -> None:

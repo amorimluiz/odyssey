@@ -7,16 +7,17 @@ from dataclasses import dataclass
 import logging
 from time import perf_counter
 import uuid
-from typing import Protocol
+from typing import Any, Protocol
+from urllib.parse import urlparse
 
 from fasthtml.common import A, Button, Div, FastHTML, Form, Input, Label, P, to_xml
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, RedirectResponse, Response
+from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 
 from app.auth import clear_session_cookie, current_user, hash_password, issue_token, require_admin, require_user, set_session_cookie, verify_password
-from app.components import admin_panel, base_layout, error_fragment, house_card, house_submit_form, invite_link_fragment, metadata_refresh_fragment, vote_button
+from app.components import admin_panel, base_layout, error_fragment, house_card, house_manual_form, house_modal_clear, house_modal_shell, house_submit_form, invite_link_fragment, metadata_refresh_fragment, vote_button
 from app.config import get_settings
-from app.db import count_users, count_votes_for_house, get_db, get_house_by_external_id, get_house_by_id, get_invite_token, get_user_by_username, houses_missing_metadata, houses_ranked, insert_house, insert_user, list_users, set_invite_token, slugify, toggle_vote, update_house_missing_metadata, user_voted_house_ids
+from app.db import count_users, count_votes_for_house, delete_house_with_votes, get_db, get_house_by_external_id, get_house_by_id, get_invite_token, get_user_by_username, houses_missing_metadata, houses_ranked, insert_house, insert_manual_house, insert_user, list_users, set_invite_token, slugify, toggle_vote, update_house_details, update_house_missing_metadata, user_voted_house_ids
 from app import scraper
 
 logger = logging.getLogger(__name__)
@@ -37,11 +38,113 @@ class RoutesRegistrar(Protocol):
     def __call__(self, app: FastHTML) -> None: ...
 
 
+@dataclass(frozen=True)
+class HouseFormData:
+    """Normalized house form values after validation."""
+
+    title: str
+    url: str
+    image_url: str | None
+    description: str | None
+    price: str | None
+
+
+def _clean_text(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _normalize_optional_text(value: object) -> str | None:
+    cleaned = _clean_text(value)
+    return cleaned or None
+
+
+def _validate_http_url(raw_value: object, *, field_label: str, required: bool) -> tuple[str | None, str | None]:
+    cleaned = _clean_text(raw_value)
+    if not cleaned:
+        if required:
+            return None, f"{field_label} é obrigatório."
+        return None, None
+
+    parsed = urlparse(cleaned)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None, f"{field_label} deve ser uma URL válida."
+    return cleaned, None
+
+
+def _parse_house_form(form: Any) -> tuple[HouseFormData | None, str | None]:
+    title = _clean_text(form.get("title", ""))
+    if not title:
+        return None, "Informe um título."
+
+    url, error = _validate_http_url(form.get("url", ""), field_label="URL", required=True)
+    if error:
+        return None, error
+
+    image_url, error = _validate_http_url(form.get("image_url", ""), field_label="URL da imagem", required=False)
+    if error:
+        return None, error
+
+    return (
+        HouseFormData(
+            title=title,
+            url=url or "",
+            image_url=image_url,
+            description=_normalize_optional_text(form.get("description", "")),
+            price=_normalize_optional_text(form.get("price", "")),
+        ),
+        None,
+    )
+
+
 def register_routes(app: FastHTML) -> None:
     """Register task-specific business routes on the provided app instance."""
 
     def _html_response(body, request: Request, *, title: str, status_code: int = 200) -> HTMLResponse:
         return HTMLResponse(content=to_xml(base_layout(body, request=request, title=title)), status_code=status_code)
+
+    def _not_found_response() -> PlainTextResponse:
+        return PlainTextResponse("Casa não encontrada.", status_code=404)
+
+    def _manual_house_form_values(form: Any) -> dict[str, str]:
+        return {
+            "title": _clean_text(form.get("title", "")),
+            "url": _clean_text(form.get("url", "")),
+            "image_url": _clean_text(form.get("image_url", "")),
+            "description": _clean_text(form.get("description", "")),
+            "price": _clean_text(form.get("price", "")),
+        }
+
+    def _manual_house_error_response(
+        *,
+        modal_title: str,
+        action: str,
+        method: str,
+        target: str,
+        swap: str,
+        submit_label: str,
+        error_message: str,
+        form_values: dict[str, str],
+    ) -> HTMLResponse:
+        return HTMLResponse(
+            content=to_xml(
+                house_modal_shell(
+                    modal_title,
+                    Div(
+                        error_fragment(error_message),
+                        house_manual_form(
+                            action=action,
+                            method=method,
+                            target=target,
+                            swap=swap,
+                            submit_label=submit_label,
+                            house=form_values,
+                        ),
+                    ),
+                )
+            ),
+            status_code=422,
+            headers={"HX-Retarget": "#house-modal", "HX-Reswap": "outerHTML"},
+        )
 
     def _register_form(
         token: str | None,
@@ -230,8 +333,9 @@ def register_routes(app: FastHTML) -> None:
         db = get_db()
         houses = houses_ranked(db)
         voted_ids = user_voted_house_ids(db, int(user_or_response["sub"]))
+        can_delete = str(user_or_response.get("role", "")) == "admin"
         if houses:
-            list_content = [house_card(house, is_voted=int(house["id"]) in voted_ids) for house in houses]
+            list_content = [house_card(house, is_voted=int(house["id"]) in voted_ids, can_delete=can_delete) for house in houses]
         else:
             list_content = [P("Cole uma URL do Airbnb ou Booking acima para começar.", cls="house-list-empty")]
 
@@ -240,6 +344,27 @@ def register_routes(app: FastHTML) -> None:
             Div(*list_content, id="house-list", cls="house-list"),
             request=request,
             title="Votação de Casas do Grupo",
+        )
+
+    @app.get("/houses/manual/new")
+    async def new_manual_house(request: Request):
+        user_or_response = require_user(request)
+        if isinstance(user_or_response, Response):
+            return user_or_response
+
+        return HTMLResponse(
+            content=to_xml(
+                house_modal_shell(
+                    "Cadastrar casa manualmente",
+                    house_manual_form(
+                        action="/houses/manual",
+                        method="post",
+                        target="#house-list",
+                        swap="afterbegin",
+                        submit_label="Cadastrar casa",
+                    ),
+                )
+            )
         )
 
     @app.post("/houses")
@@ -263,7 +388,8 @@ def register_routes(app: FastHTML) -> None:
         if existing is not None:
             existing_with_votes = dict(existing)
             existing_with_votes["vote_count"] = 0
-            return (Div(), house_card(existing_with_votes, highlight=True, oob=True))
+            is_admin = str(user_or_response.get("role", "")) == "admin"
+            return (Div(), house_card(existing_with_votes, highlight=True, oob=True, can_delete=is_admin))
 
         og_data = await scraper.fetch_og(parsed.fetch_url)
         fetch_meta = scraper.last_fetch_meta()
@@ -274,8 +400,15 @@ def register_routes(app: FastHTML) -> None:
                 fetch_meta.get("status", "unknown"),
                 fetch_meta.get("elapsed_ms", 0),
             )
+            if parsed.source == "booking":
+                error_message = (
+                    "Não foi possível buscar os metadados deste anúncio do Booking. "
+                    "Use Cadastrar manualmente para continuar."
+                )
+            else:
+                error_message = "Não foi possível buscar os metadados do anúncio."
             return HTMLResponse(
-                content=str(error_fragment("Não foi possível buscar os metadados do anúncio.", retryable=True)),
+                content=str(error_fragment(error_message, retryable=True)),
                 status_code=502,
             )
 
@@ -309,7 +442,155 @@ def register_routes(app: FastHTML) -> None:
                 "vote_count": 0,
             },
             is_voted=False,
+            can_delete=str(user_or_response.get("role", "")) == "admin",
         )
+
+    @app.post("/houses/manual")
+    async def create_manual_house(request: Request):
+        user_or_response = require_user(request)
+        if isinstance(user_or_response, Response):
+            return user_or_response
+
+        form = await request.form()
+        parsed_form, error_message = _parse_house_form(form)
+        if error_message is not None or parsed_form is None:
+            return _manual_house_error_response(
+                modal_title="Cadastrar casa manualmente",
+                action="/houses/manual",
+                method="post",
+                target="#house-list",
+                swap="afterbegin",
+                submit_label="Cadastrar casa",
+                error_message=error_message or "Dados inválidos.",
+                form_values=_manual_house_form_values(form),
+            )
+
+        db = get_db()
+        house_id = insert_manual_house(
+            db,
+            url=parsed_form.url,
+            title=parsed_form.title,
+            submitted_by=int(user_or_response["sub"]),
+            image_url=parsed_form.image_url,
+            description=parsed_form.description,
+            price=parsed_form.price,
+        )
+        house = get_house_by_id(db, house_id)
+        if house is None:
+            return _not_found_response()
+
+        house["vote_count"] = count_votes_for_house(db, house_id)
+        is_admin = str(user_or_response.get("role", "")) == "admin"
+        logger.info(
+            "event=manual_house_created house_id=%s user_id=%s",
+            house_id,
+            user_or_response["sub"],
+        )
+        return HTMLResponse(
+            content=to_xml(
+                house_card(house, is_voted=False, can_delete=is_admin),
+            )
+            + to_xml(house_modal_clear()),
+        )
+
+    @app.get("/houses/{house_id}/edit")
+    async def edit_house_form(request: Request, house_id: int):
+        user_or_response = require_user(request)
+        if isinstance(user_or_response, Response):
+            return user_or_response
+
+        db = get_db()
+        house = get_house_by_id(db, house_id)
+        if house is None:
+            return _not_found_response()
+
+        return HTMLResponse(
+            content=to_xml(
+                house_modal_shell(
+                    "Editar casa",
+                    house_manual_form(
+                        action=f"/houses/{house_id}",
+                        method="put",
+                        target=f"#house-{house_id}",
+                        swap="outerHTML",
+                        submit_label="Salvar alterações",
+                        house=house,
+                    ),
+                )
+            )
+        )
+
+    @app.put("/houses/{house_id}")
+    async def update_house(request: Request, house_id: int):
+        user_or_response = require_user(request)
+        if isinstance(user_or_response, Response):
+            return user_or_response
+
+        db = get_db()
+        existing_house = get_house_by_id(db, house_id)
+        if existing_house is None:
+            return _not_found_response()
+
+        form = await request.form()
+        parsed_form, error_message = _parse_house_form(form)
+        if error_message is not None or parsed_form is None:
+            return _manual_house_error_response(
+                modal_title="Editar casa",
+                action=f"/houses/{house_id}",
+                method="put",
+                target=f"#house-{house_id}",
+                swap="outerHTML",
+                submit_label="Salvar alterações",
+                error_message=error_message or "Dados inválidos.",
+                form_values=_manual_house_form_values(form),
+            )
+
+        if not update_house_details(
+            db,
+            house_id,
+            title=parsed_form.title,
+            url=parsed_form.url,
+            image_url=parsed_form.image_url,
+            description=parsed_form.description,
+            price=parsed_form.price,
+        ):
+            return _not_found_response()
+
+        updated_house = get_house_by_id(db, house_id)
+        if updated_house is None:
+            return _not_found_response()
+
+        updated_house["vote_count"] = count_votes_for_house(db, house_id)
+        voted_ids = user_voted_house_ids(db, int(user_or_response["sub"]))
+        is_admin = str(user_or_response.get("role", "")) == "admin"
+        logger.info(
+            "event=house_updated house_id=%s user_id=%s",
+            house_id,
+            user_or_response["sub"],
+        )
+        return HTMLResponse(
+            content=to_xml(
+                house_card(updated_house, is_voted=house_id in voted_ids, can_delete=is_admin),
+            )
+            + to_xml(house_modal_clear()),
+        )
+
+    @app.delete("/houses/{house_id}")
+    async def delete_house(request: Request, house_id: int):
+        admin_or_response = require_admin(request)
+        if isinstance(admin_or_response, Response):
+            return admin_or_response
+
+        db = get_db()
+        if not delete_house_with_votes(db, house_id):
+            return _not_found_response()
+
+        logger.info(
+            "event=house_deleted house_id=%s admin_user_id=%s",
+            house_id,
+            admin_or_response.get("sub"),
+        )
+        return Response(status_code=204)
 
     @app.post("/houses/{house_id}/vote")
     async def toggle_house_vote(request: Request, house_id: int):
@@ -320,7 +601,7 @@ def register_routes(app: FastHTML) -> None:
         db = get_db()
         house = get_house_by_id(db, house_id)
         if house is None:
-            return Response(content="Casa não encontrada.", status_code=404)
+            return _not_found_response()
 
         is_voted = toggle_vote(db, int(user["sub"]), house_id)
         house["vote_count"] = count_votes_for_house(db, house_id)
