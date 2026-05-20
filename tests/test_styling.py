@@ -6,7 +6,6 @@ import re
 from starlette.requests import Request
 from starlette.testclient import TestClient
 
-from app import components
 from app.auth import hash_password, issue_token
 from app.components import base_layout, error_fragment, house_card, nav_header, vote_button
 from app.db import get_db, init_schema, insert_user, set_invite_token
@@ -64,7 +63,7 @@ def test_nav_header_admin_has_styled_admin_link(monkeypatch) -> None:
     scope = {"type": "http", "headers": [], "method": "GET", "path": "/"}
     request = Request(scope)
 
-    monkeypatch.setattr(components, "current_user", lambda _request: {"sub": 1, "role": "admin"})
+    monkeypatch.setattr("app.components.layout.current_user", lambda _request: {"sub": 1, "role": "admin"})
     html = repr(nav_header(request))
 
     assert 'href="/admin"' in html
