@@ -26,6 +26,33 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+class _IterableLibsqlCursor:
+    """Wrap a libsql.Cursor to satisfy sqlite_utils' `for row in cursor` contract."""
+
+    def __init__(self, cur: Any) -> None:
+        self._cur = cur
+
+    def __iter__(self):
+        return iter(self._cur.fetchall())
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._cur, name)
+
+
+class _LibsqlConnectionAdapter:
+    """Wrap a libsql.Connection so cursors returned by execute() are iterable."""
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, parameters: Any = None) -> _IterableLibsqlCursor:
+        cur = self._conn.execute(sql, parameters) if parameters is not None else self._conn.execute(sql)
+        return _IterableLibsqlCursor(cur)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
+
+
 def _register_slugify(db: Database) -> None:
     create_function = getattr(db.conn, "create_function", None)
     if not callable(create_function):
@@ -60,8 +87,9 @@ def get_db() -> Database:
     if settings.is_production:
         if libsql is None:
             raise RuntimeError("libsql module is required when APP_ENV=production")
-        conn = libsql.connect(settings.turso_database_url, auth_token=settings.turso_auth_token)
-        db = Database(conn)
+        raw_conn = libsql.connect(settings.turso_database_url, auth_token=settings.turso_auth_token)
+        conn = _LibsqlConnectionAdapter(raw_conn)
+        db = Database(conn, recursive_triggers=False)
         _configure_shared_sqlite(db)
         backend = "libsql"
     else:

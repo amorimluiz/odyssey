@@ -233,6 +233,49 @@ def test_startup_uses_production_libsql_backend(monkeypatch, tmp_path) -> None:
     assert observed["mode"] != "wal"
 
 
+def test_libsql_connection_adapter_makes_cursor_iterable() -> None:
+    from app.db import _LibsqlConnectionAdapter
+
+    class FakeCursor:
+        def __init__(self, rows):
+            self._rows = rows
+            self.description = [("a",), ("b",)]
+
+        def fetchall(self):
+            return list(self._rows)
+
+        def fetchone(self):
+            return self._rows[0] if self._rows else None
+
+    class FakeConn:
+        def __init__(self):
+            self.commits = 0
+            self.scripts: list[str] = []
+
+        def execute(self, sql, parameters=None):
+            assert sql == "SELECT a, b FROM t"
+            return FakeCursor([(1, 2), (3, 4)])
+
+        def commit(self):
+            self.commits += 1
+
+        def executescript(self, script):
+            self.scripts.append(script)
+
+    raw = FakeConn()
+    adapter = _LibsqlConnectionAdapter(raw)
+
+    cursor = adapter.execute("SELECT a, b FROM t")
+    assert list(cursor) == [(1, 2), (3, 4)]
+    assert cursor.description == [("a",), ("b",)]
+    assert cursor.fetchone() == (1, 2)
+
+    adapter.commit()
+    adapter.executescript("CREATE TABLE t (a, b);")
+    assert raw.commits == 1
+    assert raw.scripts == ["CREATE TABLE t (a, b);"]
+
+
 def test_request_logging_contains_required_fields(monkeypatch, caplog, tmp_path) -> None:
     monkeypatch.setenv("SECRET_KEY", "s" * 32)
     monkeypatch.setenv("DB_PATH", str(tmp_path / "app.db"))
