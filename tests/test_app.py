@@ -238,23 +238,28 @@ def test_libsql_connection_adapter_makes_cursor_iterable() -> None:
 
     class FakeCursor:
         def __init__(self, rows):
-            self._rows = rows
+            self._rows = list(rows)
             self.description = [("a",), ("b",)]
+            self.lastrowid = 42
+            self.rowcount = len(self._rows)
+            self.fetchall_calls = 0
 
         def fetchall(self):
-            return list(self._rows)
-
-        def fetchone(self):
-            return self._rows[0] if self._rows else None
+            self.fetchall_calls += 1
+            rows = self._rows
+            self._rows = []
+            return rows
 
     class FakeConn:
         def __init__(self):
             self.commits = 0
             self.scripts: list[str] = []
+            self.last_cursor: FakeCursor | None = None
 
         def execute(self, sql, parameters=None):
             assert sql == "SELECT a, b FROM t"
-            return FakeCursor([(1, 2), (3, 4)])
+            self.last_cursor = FakeCursor([(1, 2), (3, 4)])
+            return self.last_cursor
 
         def commit(self):
             self.commits += 1
@@ -266,14 +271,55 @@ def test_libsql_connection_adapter_makes_cursor_iterable() -> None:
     adapter = _LibsqlConnectionAdapter(raw)
 
     cursor = adapter.execute("SELECT a, b FROM t")
-    assert list(cursor) == [(1, 2), (3, 4)]
+    # Drain happens eagerly inside the wrapper so commit() can run on libsql.
+    assert raw.last_cursor is not None and raw.last_cursor.fetchall_calls == 1
+    # Proxied attributes survive the drain.
     assert cursor.description == [("a",), ("b",)]
-    assert cursor.fetchone() == (1, 2)
+    assert cursor.lastrowid == 42
+    assert cursor.rowcount == 2
+    # Buffered iteration semantics match DB-API: first read returns rows, second is empty.
+    assert list(cursor) == [(1, 2), (3, 4)]
+    assert cursor.fetchone() is None
 
     adapter.commit()
     adapter.executescript("CREATE TABLE t (a, b);")
     assert raw.commits == 1
     assert raw.scripts == ["CREATE TABLE t (a, b);"]
+
+
+def test_libsql_connection_adapter_supports_context_manager_protocol() -> None:
+    from app.db import _LibsqlConnectionAdapter
+
+    events: list[str] = []
+
+    class FakeConn:
+        def __enter__(self):
+            events.append("enter")
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            events.append(f"exit:{'err' if exc_type else 'ok'}")
+            return False
+
+        def execute(self, sql, parameters=None):
+            class _C:
+                description = ()
+                lastrowid = 0
+                rowcount = 0
+                def fetchall(self):
+                    return []
+            return _C()
+
+    adapter = _LibsqlConnectionAdapter(FakeConn())
+    with adapter:
+        adapter.execute("INSERT INTO t VALUES (1)")
+    assert events == ["enter", "exit:ok"]
+
+    import pytest
+    with pytest.raises(RuntimeError):
+        with adapter:
+            raise RuntimeError("boom")
+    assert events[-2:] == ["enter", "exit:err"]
 
 
 def test_request_logging_contains_required_fields(monkeypatch, caplog, tmp_path) -> None:
