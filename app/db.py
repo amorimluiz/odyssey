@@ -27,20 +27,50 @@ def _utc_now_iso() -> str:
 
 
 class _IterableLibsqlCursor:
-    """Wrap a libsql.Cursor to satisfy sqlite_utils' `for row in cursor` contract."""
+    """Wrap a libsql.Cursor so it behaves like sqlite3.Cursor for sqlite_utils.
+
+    libsql cursors keep a statement "in progress" until their result set is
+    drained, which blocks ``conn.commit()`` after ``INSERT ... RETURNING``.
+    We drain eagerly into a list so subsequent commits succeed and callers
+    can still iterate, ``fetchone()``, ``fetchall()``, and read ``lastrowid``,
+    ``description`` and ``rowcount``."""
 
     def __init__(self, cur: Any) -> None:
         self._cur = cur
+        rows = cur.fetchall()
+        self._rows: list[Any] = list(rows) if rows is not None else []
+        self._iter = iter(self._rows)
 
     def __iter__(self):
-        return iter(self._cur.fetchall())
+        return self._iter
+
+    def fetchone(self) -> Any:
+        return next(self._iter, None)
+
+    def fetchall(self) -> list[Any]:
+        remaining = list(self._iter)
+        self._iter = iter(())
+        return remaining
+
+    def fetchmany(self, size: int | None = None) -> list[Any]:
+        if size is None or size < 0:
+            return self.fetchall()
+        out: list[Any] = []
+        for _ in range(size):
+            row = next(self._iter, None)
+            if row is None:
+                break
+            out.append(row)
+        return out
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._cur, name)
 
 
 class _LibsqlConnectionAdapter:
-    """Wrap a libsql.Connection so cursors returned by execute() are iterable."""
+    """Wrap a libsql.Connection so cursors returned by execute() are iterable
+    and the context-manager protocol used by sqlite_utils (``with db.conn:`` in
+    ``Table.insert_chunk`` / ``Table.update``) resolves to the wrapped connection."""
 
     def __init__(self, conn: Any) -> None:
         self._conn = conn
@@ -48,6 +78,13 @@ class _LibsqlConnectionAdapter:
     def execute(self, sql: str, parameters: Any = None) -> _IterableLibsqlCursor:
         cur = self._conn.execute(sql, parameters) if parameters is not None else self._conn.execute(sql)
         return _IterableLibsqlCursor(cur)
+
+    def __enter__(self) -> "_LibsqlConnectionAdapter":
+        self._conn.__enter__()
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        return self._conn.__exit__(exc_type, exc, tb)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._conn, name)

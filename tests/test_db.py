@@ -8,6 +8,7 @@ import pytest
 from sqlite_utils import Database
 
 from app.db import (
+    _LibsqlConnectionAdapter,
     count_users,
     count_votes_for_house,
     get_house_by_external_id,
@@ -187,6 +188,177 @@ def test_init_schema_and_helpers_work_with_libsql_like_connection_without_route_
     assert get_user_by_username(db, "USER-A") is not None
     assert toggle_vote(db, user_id, house_id) is True
     assert count_votes_for_house(db, house_id) == 1
+
+
+class _NonIterableCursor:
+    """Mimic libsql.Cursor: exposes fetchall()/description but not __iter__.
+
+    Also models libsql's "statement in progress" semantics: a cursor that
+    produces rows (RETURNING / SELECT) blocks commit on the parent connection
+    until ``fetchall()`` (or fetchone-to-exhaustion) drains it."""
+
+    def __init__(self, cur, *, owner: "_NonIterableCursorConnection", produces_rows: bool) -> None:
+        self._cur = cur
+        self._owner = owner
+        if produces_rows:
+            owner._pending_cursors.add(id(self))
+            self._token: int | None = id(self)
+        else:
+            self._token = None
+
+    @property
+    def description(self):
+        return self._cur.description
+
+    @property
+    def lastrowid(self):
+        return self._cur.lastrowid
+
+    @property
+    def rowcount(self):
+        return self._cur.rowcount
+
+    def _release(self) -> None:
+        if self._token is not None:
+            self._owner._pending_cursors.discard(self._token)
+            self._token = None
+
+    def fetchall(self):
+        rows = self._cur.fetchall()
+        self._release()
+        return rows
+
+    def fetchone(self):
+        row = self._cur.fetchone()
+        if row is None:
+            self._release()
+        return row
+
+
+class _NonIterableCursorConnection(_LibSQLLikeConnection):
+    """libsql-shaped conn: cursors aren't iterable; commit blocks on undrained rows."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._pending_cursors: set[int] = set()
+
+    @staticmethod
+    def _produces_rows(sql: str) -> bool:
+        head = sql.lstrip().lower()
+        return head.startswith("select") or " returning " in head or head.endswith("returning")
+
+    def execute(self, *args, **kwargs):
+        cur = super().execute(*args, **kwargs)
+        sql = str(args[0]) if args else ""
+        return _NonIterableCursor(cur, owner=self, produces_rows=self._produces_rows(sql))
+
+    def commit(self):
+        if self._pending_cursors:
+            raise ValueError("cannot commit transaction - SQL statements in progress")
+        return super().commit()
+
+    def __enter__(self):
+        self._conn.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None and self._pending_cursors:
+            raise ValueError("cannot commit transaction - SQL statements in progress")
+        return self._conn.__exit__(exc_type, exc, tb)
+
+
+def test_libsql_adapter_supports_context_manager_protocol() -> None:
+    inner = _LibSQLLikeConnection()
+    adapter = _LibsqlConnectionAdapter(inner)
+    adapter.execute("CREATE TABLE t (x INTEGER)")
+
+    with adapter:
+        adapter.execute("INSERT INTO t VALUES (?)", [1])
+
+    rows = adapter.execute("SELECT x FROM t").fetchall()
+    assert [r[0] for r in rows] == [1]
+
+
+def test_libsql_adapter_rolls_back_on_exception_in_with_block() -> None:
+    inner = _LibSQLLikeConnection()
+    adapter = _LibsqlConnectionAdapter(inner)
+    adapter.execute("CREATE TABLE t (x INTEGER)")
+    adapter.execute("INSERT INTO t VALUES (?)", [1])
+    inner.commit()
+
+    with pytest.raises(RuntimeError):
+        with adapter:
+            adapter.execute("INSERT INTO t VALUES (?)", [2])
+            raise RuntimeError("boom")
+
+    rows = adapter.execute("SELECT x FROM t ORDER BY x").fetchall()
+    assert [r[0] for r in rows] == [1]
+
+
+def test_toggle_vote_via_libsql_adapter_inserts_and_deletes() -> None:
+    db = Database(_LibsqlConnectionAdapter(_LibSQLLikeConnection()), recursive_triggers=False)
+    init_schema(db)
+
+    user_id = insert_user(db, name="A", username="user-a", password_hash="hash")
+    house_id = insert_house(
+        db,
+        source="airbnb",
+        external_id="vote-via-adapter",
+        url="https://airbnb.com/rooms/vote-via-adapter",
+        title="House",
+        submitted_by=user_id,
+        submitted_at="2026-01-01T00:00:00+00:00",
+    )
+
+    assert toggle_vote(db, user_id, house_id) is True
+    assert count_votes_for_house(db, house_id) == 1
+
+    assert toggle_vote(db, user_id, house_id) is False
+    assert count_votes_for_house(db, house_id) == 0
+
+
+def test_libsql_adapter_wraps_non_iterable_cursor_for_query() -> None:
+    db = Database(_LibsqlConnectionAdapter(_NonIterableCursorConnection()), recursive_triggers=False)
+    init_schema(db)
+    insert_user(db, name="A", username="user-a", password_hash="hash")
+
+    rows = list(db.query("SELECT username FROM users"))
+    assert rows == [{"username": "user-a"}]
+
+
+def test_libsql_adapter_drains_returning_cursor_before_commit() -> None:
+    """insert_user / insert_house use INSERT ... RETURNING id followed by
+    db.conn.commit(). On real libsql the commit fails unless the cursor is
+    drained first. The adapter must buffer rows in execute() so this works."""
+    db = Database(_LibsqlConnectionAdapter(_NonIterableCursorConnection()), recursive_triggers=False)
+    init_schema(db)
+
+    user_id = insert_user(db, name="User", username="user-a", password_hash="hash")
+    house_id = insert_house(
+        db,
+        source="airbnb",
+        external_id="returning-via-adapter",
+        url="https://airbnb.com/rooms/returning-via-adapter",
+        title="House",
+        submitted_by=user_id,
+        submitted_at="2026-01-01T00:00:00+00:00",
+    )
+
+    assert toggle_vote(db, user_id, house_id) is True
+    assert toggle_vote(db, user_id, house_id) is False
+    assert count_votes_for_house(db, house_id) == 0
+
+
+def test_libsql_adapter_wrapped_cursor_supports_fetchone_after_iter() -> None:
+    """Buffer-backed cursor must keep description/lastrowid available after iteration."""
+    conn = _LibsqlConnectionAdapter(_NonIterableCursorConnection())
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+    cur = conn.execute("INSERT INTO t (name) VALUES (?) RETURNING id", ["x"])
+    rows_iter = list(cur)
+    assert [tuple(row) for row in rows_iter] == [(1,)]
+    assert cur.fetchone() is None
+    assert cur.lastrowid == 1
+    conn.commit()
 
 
 def test_insert_user_returns_persisted_row_id_and_lowercase_username() -> None:
