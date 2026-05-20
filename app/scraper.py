@@ -48,7 +48,7 @@ _BROWSER_HEADERS = {
         "Chrome/124.0.0.0 Safari/537.36"
     ),
     "Accept": "text/html,application/xhtml+xml",
-    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
     "Accept-Encoding": "gzip, deflate, br",
 }
 _TIMEOUT = httpx.Timeout(connect=5.0, read=8.0, write=5.0, pool=5.0)
