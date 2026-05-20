@@ -183,6 +183,30 @@ function copyInviteLink() {
     )
 
 
+def metadata_refresh_fragment(*, scanned: int | None = None, updated: int | None = None, failed: int | None = None) -> Div:
+    """Render admin metadata refresh controls and optional summary."""
+    summary = None
+    if scanned is not None and updated is not None and failed is not None:
+        summary = P(
+            f"Scanned {scanned} houses. Updated {updated}. Failed {failed}.",
+            cls="admin-refresh-summary",
+        )
+
+    return Div(
+        Button(
+            "Refresh missing metadata",
+            type="button",
+            hx_post="/admin/refresh-metadata",
+            hx_target="#metadata-refresh-fragment",
+            hx_swap="outerHTML",
+            cls="btn btn-secondary",
+        ),
+        summary,
+        id="metadata-refresh-fragment",
+        cls="admin-actions admin-refresh",
+    )
+
+
 def admin_panel(*, invite_url: str, members: list[dict]) -> Div:
     """Render admin panel with invite controls and read-only member list."""
     rows = [
@@ -196,6 +220,7 @@ def admin_panel(*, invite_url: str, members: list[dict]) -> Div:
 
     return Div(
         invite_link_fragment(invite_url),
+        metadata_refresh_fragment(),
         H2("Members", cls="section-title"),
         Table(
             Thead(Tr(Th("Name"), Th("Username"), Th("Joined"))),
