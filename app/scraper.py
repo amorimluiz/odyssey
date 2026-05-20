@@ -390,7 +390,7 @@ async def fetch_og(url: str) -> OGData | None:
         }
     )
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_BROWSER_HEADERS) as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_BROWSER_HEADERS, follow_redirects=True) as client:
             response = await client.get(url)
     except httpx.TimeoutException:
         _last_fetch_meta["status"] = "timeout"
