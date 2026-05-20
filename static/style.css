@@ -15,6 +15,7 @@
   --color-hairline: #ced0d4;
   --color-hairline-soft: #dee3e9;
   --color-disabled-text: #bcc0c4;
+  --color-critical-strong: #e41f3f;
 
   --font-family-base: "Optimistic VF", "Segoe UI", sans-serif;
   --font-body-md-size: 16px;
@@ -35,6 +36,7 @@
   --font-button-line: 1.43;
 
   --space-xs: 8px;
+  --space-sm: 10px;
   --space-md: 12px;
   --space-base: 16px;
   --space-lg: 20px;
@@ -74,41 +76,44 @@ body.app-body {
 
 .nav-links {
   display: flex;
-  gap: var(--space-base);
+  gap: var(--space-xs);
   align-items: center;
 }
 
-.nav-links a {
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-full);
   color: var(--color-ink-deep);
   text-decoration: none;
+  cursor: pointer;
+  font: inherit;
+}
+
+.nav-link:hover {
+  background: rgba(10, 19, 23, 0.06);
+  text-decoration: none;
+}
+
+.nav-link-text {
+  width: auto;
+  padding: 0 var(--space-md);
   font-weight: 700;
+}
+
+.nav-icon {
+  display: block;
 }
 
 .nav-logout-form {
   display: inline-flex;
   margin: 0;
-}
-
-.nav-logout-button {
-  background: transparent;
-  border: 0;
-  color: var(--color-ink-deep);
-  cursor: pointer;
-  font: inherit;
-  font-weight: 700;
-  padding: 0;
-}
-
-.nav-logout-button:hover {
-  text-decoration: underline;
-}
-
-.page-title {
-  margin: 0 0 var(--space-lg);
-  color: var(--color-ink-deep);
-  font-size: var(--font-heading-md-size);
-  font-weight: var(--font-heading-md-weight);
-  line-height: var(--font-heading-md-line);
 }
 
 .auth-panel,
@@ -117,11 +122,18 @@ body.app-body {
   background: var(--color-canvas);
   border: 1px solid var(--color-hairline-soft);
   border-radius: var(--radius-xxl);
-  padding: var(--space-xl);
 }
 
 .auth-panel,
-.admin-panel,
+.admin-panel {
+  padding: var(--space-xl);
+  min-width: 0;
+}
+
+.house-card {
+  padding: var(--space-sm) var(--space-base);
+}
+
 .house-card-content {
   min-width: 0;
 }
@@ -132,19 +144,28 @@ body.app-body {
   gap: var(--space-md);
 }
 
+.house-submit-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.house-submit-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .house-submit-stack {
   display: grid;
   gap: var(--space-base);
 }
 
-.house-submit-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-md);
-}
-
 .house-modal-host {
   min-height: 0;
+}
+
+.house-modal-host:empty {
+  display: none;
 }
 
 .house-modal {
@@ -219,6 +240,23 @@ body.app-body {
   line-height: var(--font-button-line);
 }
 
+.house-submit-icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  background: var(--color-ink-button);
+  color: var(--color-on-ink-button);
+  flex: 0 0 auto;
+}
+
+.house-submit-icon {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
 .btn-primary {
   background: var(--color-ink-button);
   color: var(--color-on-ink-button);
@@ -255,17 +293,24 @@ body.app-body {
 
 .house-card {
   display: grid;
-  gap: var(--space-base);
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: var(--space-lg);
+  row-gap: var(--space-md);
+  align-items: start;
 }
 
 .house-card-highlight {
   border-color: var(--color-primary);
 }
 
+.house-card-media {
+  display: flex;
+}
+
 .house-card-image,
 .house-card-image-placeholder {
   width: 100%;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 3 / 2;
   border-radius: var(--radius-xl);
   object-fit: cover;
   background: var(--color-surface-soft);
@@ -279,69 +324,185 @@ body.app-body {
 
 .house-card-title {
   margin: 0;
-  font-size: var(--font-heading-sm-size);
-  font-weight: var(--font-heading-sm-weight);
-  line-height: var(--font-heading-sm-line);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.22;
   color: var(--color-ink-deep);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .house-card-description,
-.house-card-price { margin: 0; }
+.house-card-price {
+  margin: 0;
+}
+
+.house-card-description {
+  color: var(--color-steel);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.house-card-price {
+  color: var(--color-ink-deep);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.22;
+}
 
 .house-card-source {
   display: inline-flex;
+  align-self: flex-start;
+  width: fit-content;
   align-items: center;
   border-radius: var(--radius-full);
-  padding: 4px 10px;
+  padding: 3px 10px;
   font-size: var(--font-caption-size);
   font-weight: var(--font-caption-weight);
   line-height: var(--font-caption-line);
+  letter-spacing: 0.01em;
+  border: 1px solid transparent;
 }
 
 .badge-source-airbnb {
-  background: var(--color-primary);
-  color: var(--color-on-primary);
+  background: rgba(0, 100, 224, 0.08);
+  color: var(--color-primary-deep);
+  border-color: rgba(0, 100, 224, 0.16);
 }
 
 .badge-source-booking {
-  background: var(--color-charcoal);
-  color: var(--color-canvas);
+  background: rgba(68, 73, 80, 0.08);
+  color: var(--color-charcoal);
+  border-color: rgba(68, 73, 80, 0.14);
 }
 
 .badge-source-manual {
-  background: var(--color-primary-deep);
-  color: var(--color-on-primary);
+  background: rgba(4, 87, 203, 0.08);
+  color: var(--color-primary-deep);
+  border-color: rgba(4, 87, 203, 0.16);
 }
 
-.house-card-actions {
+.house-card-content {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-xs);
-}
-
-.house-card-action {
-  padding: 10px 18px;
-}
-
-.house-card-vote-btn {
-  background: var(--color-primary);
-  color: var(--color-on-primary);
-}
-
-.house-card-vote-btn.is-voted {
-  background: var(--color-success);
+  flex-direction: column;
+  min-width: 0;
 }
 
 .house-card-link {
-  color: var(--color-primary);
-  font-weight: 700;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  color: inherit;
+  text-decoration: none;
 }
 
-.house-card-vote-row {
+.house-card-link:hover .house-card-title {
+  color: var(--color-primary-deep);
+}
+
+.house-card-action-zone {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-xs);
   align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding-inline: var(--space-md);
+  flex-wrap: wrap;
+}
+
+.house-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.house-card-action {
+  min-width: 42px;
+}
+
+.house-card-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--color-steel);
+  cursor: pointer;
+  border-radius: var(--radius-full);
+  font: inherit;
+}
+
+.house-card-icon-btn:hover {
+  background: rgba(10, 19, 23, 0.06);
+  color: var(--color-ink-deep);
+}
+
+.house-card-action-danger:hover {
+  color: var(--color-critical-strong);
+  background: rgba(228, 31, 63, 0.08);
+}
+
+.house-card-action-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.house-card-vote {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: var(--space-xs);
+}
+
+.house-card-vote-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--color-steel);
+  cursor: pointer;
+  border-radius: var(--radius-full);
+  font: inherit;
+}
+
+.house-card-vote-btn:hover {
+  background: rgba(10, 19, 23, 0.06);
+}
+
+.house-card-vote-btn.is-neutral {
+  color: var(--color-steel);
+}
+
+.house-card-vote-btn.is-voted {
+  color: var(--color-critical-strong);
+}
+
+.house-card-vote-btn.is-voted:hover {
+  background: rgba(228, 31, 63, 0.08);
+}
+
+.house-card-vote-icon {
+  display: inline-block;
+  min-width: 1em;
+  text-align: center;
+  font-size: 25px;
+  line-height: 1;
+}
+
+.house-card-vote-count {
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-ink-deep);
+  min-width: 1ch;
 }
 
 .error-fragment {
@@ -360,11 +521,77 @@ body.app-body {
   flex-wrap: wrap;
 }
 
+.admin-actions-compact {
+  gap: var(--space-sm);
+}
+
+.admin-action-btn {
+  min-width: 0;
+}
+
+.admin-section-label {
+  margin: 0;
+  color: var(--color-steel);
+  font-size: var(--font-caption-size);
+  font-weight: var(--font-caption-weight);
+  line-height: var(--font-caption-line);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.admin-invite-input {
+  margin-bottom: 0;
+}
+
+.admin-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm) var(--space-md);
+}
+
+.admin-controls .admin-invite {
+  display: contents;
+}
+
+.admin-controls .admin-section-label,
+.admin-controls .admin-invite-input {
+  flex: 1 1 100%;
+}
+
+.admin-controls .admin-invite .admin-actions {
+  margin-left: auto;
+}
+
+.admin-controls .admin-refresh {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-xs);
+}
+
+.admin-refresh-summary {
+  margin: 0;
+  color: var(--color-steel);
+  font-size: var(--font-caption-size);
+}
+
+.admin-members {
+  display: grid;
+  gap: var(--space-base);
+  margin-top: var(--space-xl);
+  padding-top: var(--space-xl);
+  border-top: 1px solid var(--color-hairline-soft);
+}
+
+.admin-members-title {
+  margin: 0;
+}
+
 .members-table {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
-  margin-top: var(--space-base);
+  margin-top: 0;
 }
 
 .members-table th,
@@ -376,8 +603,45 @@ body.app-body {
   word-break: break-word;
 }
 
+@media (max-width: 767px) {
+  .house-card {
+    padding: var(--space-xs) var(--space-md);
+    row-gap: var(--space-xs);
+  }
+  .house-card-image,
+  .house-card-image-placeholder {
+    aspect-ratio: auto;
+    height: 180px;
+    object-fit: cover;
+  }
+  .house-card-link {
+    gap: var(--space-xs);
+  }
+  .house-card-description {
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+}
+
 @media (min-width: 768px) {
   .layout-shell { padding: var(--space-xxl); }
-  .house-card { grid-template-columns: 260px 1fr; }
+  .house-card {
+    grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+    align-items: stretch;
+  }
+  .house-card-media {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .house-card-content {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .house-card-action-zone {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
   .admin-actions { justify-content: flex-start; }
 }
