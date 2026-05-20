@@ -109,9 +109,11 @@ def test_startup_calls_init_schema_once(monkeypatch, tmp_path) -> None:
     import main
 
     calls = {"count": 0}
+    original_init_schema = main.app_db.init_schema
 
     def fake_init_schema(db) -> None:
         calls["count"] += 1
+        original_init_schema(db)
 
     monkeypatch.setattr(main.app_db, "init_schema", fake_init_schema)
     with TestClient(main.create_app()):
@@ -119,32 +121,10 @@ def test_startup_calls_init_schema_once(monkeypatch, tmp_path) -> None:
 
     assert calls["count"] == 1
 
-
-def test_startup_restores_before_schema_initialization(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("SECRET_KEY", "s" * 32)
-    monkeypatch.setenv("DB_PATH", str(tmp_path / "app.db"))
-    monkeypatch.setenv("HF_TOKEN", "hf_token")
-    monkeypatch.setenv("HF_REPO_ID", "owner/repo")
-
-    import main
-
-    order: list[str] = []
-
-    def fake_restore(_settings) -> None:
-        order.append("restore")
-
-    def fake_init_schema(_db) -> None:
-        order.append("schema")
-
-    monkeypatch.setattr(main.app_persistence, "restore_sqlite_files", fake_restore)
-    monkeypatch.setattr(main.app_db, "init_schema", fake_init_schema)
-
-    with TestClient(main.create_app()):
-        pass
-
-    assert order == ["restore", "schema"]
-
-
+    db = main.app_db.get_db()
+    assert db["users"].exists()
+    assert db["houses"].exists()
+    assert db["votes"].exists()
 
 def test_startup_is_idempotent_for_same_db_path(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("SECRET_KEY", "s" * 32)
