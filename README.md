@@ -25,7 +25,6 @@ The visible app UI and user-facing error copy are in Brazilian Portuguese.
 |---|---|
 | Web framework | [FastHTML](https://fastht.ml) + [Starlette](https://www.starlette.io) |
 | Database | SQLite via [sqlite-utils](https://sqlite-utils.datasette.io) |
-| Remote persistence | [huggingface_hub](https://huggingface.co/docs/huggingface_hub) |
 | Scraping | [httpx](https://www.python-httpx.org) + [BeautifulSoup4](https://www.crummy.com/software/BeautifulSoup/) |
 | Auth | JWT (PyJWT) + bcrypt (passlib) |
 | Server | [Uvicorn](https://www.uvicorn.org) |
@@ -48,11 +47,6 @@ cp .env.example .env
 | `DB_PATH` | No | `./app.db` | Path to the SQLite database file. |
 | `ADMIN_EMAIL` | No | — | Email that receives the `admin` role on first registration. |
 | `BASE_URL` | No | — | Public base URL used to build invite links (e.g. `https://myapp.example.com`). Falls back to the request host when omitted. |
-| `HF_TOKEN` | No | — | Hugging Face token used to restore and sync the SQLite file set. Leave empty for local-only mode. |
-| `HF_REPO_ID` | No | — | Hugging Face repository id such as `owner/repo`. Leave empty for local-only mode. |
-| `HF_REPO_TYPE` | No | `dataset` | Hugging Face repo type for the remote SQLite file set. |
-| `HF_DB_PATH_IN_REPO` | No | `app.db` | Path of the SQLite file inside the Hub repository. |
-| `HF_SYNC_ENABLED` | No | `true` | Enables remote restore/sync when the other Hugging Face settings are present. |
 
 Generate a safe `SECRET_KEY`:
 
@@ -82,19 +76,7 @@ The app will be available at `http://localhost:8000`.
 
 ### Deploy Notes
 
-The app keeps working in local SQLite mode when `HF_TOKEN` or `HF_REPO_ID` are missing.
-
-For ephemeral platforms such as Render, configure the Hugging Face settings so the SQLite file set can be restored on startup and synced after writes:
-
-```bash
-HF_TOKEN=...
-HF_REPO_ID=owner/repo
-HF_REPO_TYPE=dataset
-HF_DB_PATH_IN_REPO=app.db
-HF_SYNC_ENABLED=true
-```
-
-The remote repository stores the main database file plus the WAL companions when present. If the filesystem is wiped between deploys, the app restores from Hugging Face Hub before schema initialization.
+Provide a persistent `DB_PATH` on platforms that do not keep the filesystem between deploys. SQLite persistence is local-only and depends on the configured database file remaining available.
 
 ### Run tests
 
@@ -135,7 +117,6 @@ open htmlcov/index.html
 │   ├── components.py   # FastHTML UI components
 │   ├── config.py       # Environment-backed settings
 │   ├── db.py           # SQLite schema and query helpers
-│   ├── persistence.py  # Hugging Face Hub restore/sync helpers
 │   ├── errors.py       # Error response helpers
 │   ├── routes.py       # All HTTP route handlers
 │   └── scraper.py      # URL parsing and Open Graph fetching

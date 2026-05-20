@@ -12,19 +12,10 @@ from sqlite_utils import Database
 
 from app.config import get_settings
 from app.errors import DuplicateHouseError
-from app.persistence import sync_sqlite_files
 
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _sync_remote_sqlite() -> None:
-    try:
-        settings = get_settings()
-    except ValueError:
-        return
-    sync_sqlite_files(settings)
 
 
 def slugify(text: str) -> str:
@@ -106,8 +97,6 @@ def insert_user(
             "created_at": created_at or _utc_now_iso(),
         },
     )
-    db.conn.commit()
-    _sync_remote_sqlite()
     row_id = db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
     return int(row_id)
 
@@ -157,8 +146,6 @@ def insert_house(
             raise DuplicateHouseError("House already exists for source/external_id") from exc
         raise
 
-    db.conn.commit()
-    _sync_remote_sqlite()
     row_id = db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
     return int(row_id)
 
@@ -225,7 +212,6 @@ def update_house_missing_metadata(db: Database, house_id: int, og_data) -> bool:
     params = list(updates.values()) + [house_id]
     db.execute(f"UPDATE houses SET {assignments} WHERE id = ?", params)
     db.conn.commit()
-    _sync_remote_sqlite()
     return True
 
 
@@ -279,7 +265,6 @@ def toggle_vote(db: Database, user_id: int, house_id: int, voted_at: str | None 
     if existing:
         db["votes"].delete_where("user_id = ? AND house_id = ?", [user_id, house_id])
         db.conn.commit()
-        _sync_remote_sqlite()
         return False
 
     db["votes"].insert(
@@ -290,7 +275,6 @@ def toggle_vote(db: Database, user_id: int, house_id: int, voted_at: str | None 
         }
     )
     db.conn.commit()
-    _sync_remote_sqlite()
     return True
 
 
@@ -313,7 +297,6 @@ def set_invite_token(db: Database, token: str) -> None:
         ["invite_token", token],
     )
     db.conn.commit()
-    _sync_remote_sqlite()
 
 
 def list_users(db: Database) -> list[dict[str, Any]]:

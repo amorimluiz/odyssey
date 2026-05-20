@@ -14,7 +14,6 @@ from starlette.staticfiles import StaticFiles
 from app.auth import SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS, _cookie_secure_flag, current_user
 from app.config import get_settings
 from app import db as app_db
-from app import persistence as app_persistence
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +62,6 @@ def create_app() -> FastHTML:
 
     @app.on_event("startup")
     async def startup() -> None:
-        app_persistence.restore_sqlite_files(settings)
         db = app_db.get_db()
         app_db.init_schema(db)
 

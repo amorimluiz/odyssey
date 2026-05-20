@@ -9,21 +9,15 @@ def test_readme_and_env_example_document_persistence_contract() -> None:
 
     for snippet in [
         "The visible app UI and user-facing error copy are in Brazilian Portuguese.",
-        "| `HF_TOKEN` | No | — | Hugging Face token used to restore and sync the SQLite file set. Leave empty for local-only mode. |",
-        "| `HF_REPO_ID` | No | — | Hugging Face repository id such as `owner/repo`. Leave empty for local-only mode. |",
-        "| `HF_REPO_TYPE` | No | `dataset` | Hugging Face repo type for the remote SQLite file set. |",
-        "The app keeps working in local SQLite mode when `HF_TOKEN` or `HF_REPO_ID` are missing.",
-        "The test suite mocks Hugging Face Hub calls, so it does not require a real token.",
+        "SQLite persistence is local-only and depends on the configured database file remaining available.",
+        "Provide a persistent `DB_PATH` on platforms that do not keep the filesystem between deploys.",
+        "Coverage is enforced at 80%.",
     ]:
         assert snippet in readme
 
     for snippet in [
-        "HF_TOKEN=",
-        "HF_REPO_ID=",
-        "HF_REPO_TYPE=dataset",
-        "HF_DB_PATH_IN_REPO=app.db",
-        "HF_SYNC_ENABLED=true",
-        "Leave HF_TOKEN and HF_REPO_ID empty to keep the app in local SQLite mode.",
-        "Set to false to disable remote sync even when Hub settings are present.",
+        "DB_PATH=./app.db",
+        "SECRET_KEY=replace-with-at-least-32-random-bytes",
+        "ADMIN_EMAIL=admin@example.com",
     ]:
         assert snippet in env_example
