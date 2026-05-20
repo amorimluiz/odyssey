@@ -48,6 +48,7 @@ def test_house_card_has_documented_classes() -> None:
     assert "house-card-title" in html
     assert "house-card-source" in html
     assert "house-card-image-placeholder" in html
+    assert "Abrir anúncio" in html
 
 
 def test_vote_button_toggled_class_and_aria_pressed() -> None:
@@ -56,6 +57,7 @@ def test_vote_button_toggled_class_and_aria_pressed() -> None:
     assert "house-card-vote-btn" in html
     assert "is-voted" in html
     assert 'aria-pressed="true"' in html
+    assert "Votado (4)" in html
 
 
 def test_nav_header_admin_has_styled_admin_link(monkeypatch) -> None:

@@ -264,7 +264,7 @@ def test_register_cookie_round_trip_reaches_home(monkeypatch, tmp_path) -> None:
     assert register_response.status_code == 303
     assert home_response.status_code == 200
     _assert_html_response(home_response)
-    assert "Paste an Airbnb or Booking URL above to get started" in home_response.text
+    assert "Cole uma URL do Airbnb ou Booking acima para começar." in home_response.text
     assert "/login" not in home_response.headers.get("location", "")
 
 
@@ -435,7 +435,7 @@ def test_login_cookie_round_trip_reaches_home(monkeypatch, tmp_path) -> None:
     assert login_response.status_code == 303
     assert home_response.status_code == 200
     _assert_html_response(home_response)
-    assert "Paste an Airbnb or Booking URL above to get started" in home_response.text
+    assert "Cole uma URL do Airbnb ou Booking acima para começar." in home_response.text
 
 
 def test_login_unknown_username_returns_error(monkeypatch, tmp_path) -> None:

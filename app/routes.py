@@ -233,7 +233,7 @@ def register_routes(app: FastHTML) -> None:
         if houses:
             list_content = [house_card(house, is_voted=int(house["id"]) in voted_ids) for house in houses]
         else:
-            list_content = [P("Paste an Airbnb or Booking URL above to get started", cls="house-list-empty")]
+            list_content = [P("Cole uma URL do Airbnb ou Booking acima para começar.", cls="house-list-empty")]
 
         return base_layout(
             house_submit_form(),
@@ -254,7 +254,7 @@ def register_routes(app: FastHTML) -> None:
         if parsed is None:
             logger.info("scraper outcome=parse_fail url=%s", raw_url)
             return HTMLResponse(
-                content=str(error_fragment("Only Airbnb and Booking URLs are supported.")),
+                content=str(error_fragment("Apenas URLs do Airbnb e Booking são suportadas.")),
                 status_code=422,
             )
 
@@ -275,7 +275,7 @@ def register_routes(app: FastHTML) -> None:
                 fetch_meta.get("elapsed_ms", 0),
             )
             return HTMLResponse(
-                content=str(error_fragment("Could not fetch listing metadata.", retryable=True)),
+                content=str(error_fragment("Não foi possível buscar os metadados do anúncio.", retryable=True)),
                 status_code=502,
             )
 
@@ -315,12 +315,12 @@ def register_routes(app: FastHTML) -> None:
     async def toggle_house_vote(request: Request, house_id: int):
         user = current_user(request)
         if user is None:
-            return Response(content="Unauthorized", status_code=401)
+            return Response(content="Não autorizado.", status_code=401)
 
         db = get_db()
         house = get_house_by_id(db, house_id)
         if house is None:
-            return Response(content="House not found", status_code=404)
+            return Response(content="Casa não encontrada.", status_code=404)
 
         is_voted = toggle_vote(db, int(user["sub"]), house_id)
         house["vote_count"] = count_votes_for_house(db, house_id)

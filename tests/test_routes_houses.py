@@ -62,7 +62,7 @@ def test_house_card_placeholder_when_image_missing() -> None:
             }
         )
     )
-    assert "No image available" in html
+    assert "Imagem indisponível" in html
 
 
 def test_house_card_hides_price_when_missing() -> None:
@@ -81,6 +81,7 @@ def test_house_card_hides_price_when_missing() -> None:
         )
     )
     assert "house-card-price" not in html
+    assert "Abrir anúncio" in html
 
 
 def test_house_card_source_badge_mapping() -> None:
@@ -129,7 +130,7 @@ def test_get_root_empty_state(monkeypatch, tmp_path) -> None:
         response = client.get("/")
 
     assert response.status_code == 200
-    assert "Paste an Airbnb or Booking URL above to get started" in response.text
+    assert "Cole uma URL do Airbnb ou Booking acima para começar." in response.text
 
 
 def test_post_houses_invalid_domain_returns_422(monkeypatch, tmp_path) -> None:
@@ -139,7 +140,7 @@ def test_post_houses_invalid_domain_returns_422(monkeypatch, tmp_path) -> None:
 
     assert response.status_code == 422
     assert response.headers["content-type"] == "text/html; charset=utf-8"
-    assert "Only Airbnb and Booking URLs are supported." in response.text
+    assert "Apenas URLs do Airbnb e Booking são suportadas." in response.text
     assert "error-fragment" in response.text
     assert get_db()["houses"].count == 0
 
@@ -164,7 +165,7 @@ def test_post_houses_success_inserts_and_returns_card(monkeypatch, tmp_path) -> 
 
     assert response.status_code == 200
     assert "house-" in response.text
-    assert "Open listing" in response.text
+    assert "Abrir anúncio" in response.text
     assert calls == [str(tmp_path / "app.db")]
     rows = list(get_db().query("SELECT submitted_by, source, external_id FROM houses"))
     assert len(rows) == 1
@@ -224,6 +225,25 @@ def test_post_houses_booking_submission_uses_fetch_url_and_renders_price(monkeyp
     assert rows[0]["source"] == "booking"
     assert rows[0]["external_id"] == "villa-inn-economic"
     assert int(rows[0]["submitted_by"]) == user_id
+
+
+def test_post_houses_metadata_failure_returns_502_with_retryable_feedback(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        _login_cookie(client)
+        import app.routes as routes_module
+
+        async def fake_fetch(_url: str):
+            return None
+
+        monkeypatch.setattr(routes_module.scraper, "fetch_og", fake_fetch)
+        monkeypatch.setattr(routes_module.scraper, "last_fetch_meta", lambda: {"status": 200, "elapsed_ms": 19})
+
+        response = client.post("/houses", data={"url": "https://www.airbnb.com/rooms/123456"})
+
+    assert response.status_code == 502
+    assert "Não foi possível buscar os metadados do anúncio." in response.text
+    assert "Tente novamente em alguns segundos." in response.text
+    assert "error-fragment retryable" in response.text
 
 
 def test_post_houses_duplicate_highlight_no_insert(monkeypatch, tmp_path) -> None:

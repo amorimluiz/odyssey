@@ -66,7 +66,7 @@ def house_submit_form() -> Form:
             required=True,
             cls="text-input",
         ),
-        Button("Add house", type="submit", cls="btn btn-primary"),
+        Button("Adicionar casa", type="submit", cls="btn btn-primary"),
         hx_post="/houses",
         hx_target="#house-list",
         hx_swap="afterbegin",
@@ -77,7 +77,7 @@ def house_submit_form() -> Form:
 def vote_button(house: dict, is_voted: bool) -> Button:
     """Render HTMX vote toggle button fragment."""
     vote_count = int(house.get("vote_count", 0))
-    label = "Voted" if is_voted else "Vote"
+    label = "Votado" if is_voted else "Votar"
     btn_class = "btn house-card-vote-btn is-voted" if is_voted else "btn house-card-vote-btn"
     return Button(
         f"{label} ({vote_count})",
@@ -95,9 +95,9 @@ def house_card(house: dict, *, is_voted: bool = False, highlight: bool = False, 
     """Render a reusable house card fragment for list and HTMX responses."""
     image_url = house.get("image_url")
     image = (
-        Img(src=image_url, alt=str(house.get("title", "House listing")), cls="house-card-image")
+        Img(src=image_url, alt=str(house.get("title", "Anúncio de casa")), cls="house-card-image")
         if image_url
-        else Div("No image available", cls="house-card-image house-card-image-placeholder")
+        else Div("Imagem indisponível", cls="house-card-image house-card-image-placeholder")
     )
     description = str(house.get("description") or "").strip()
     short_description = description[:157] + "..." if len(description) > 160 else description
@@ -118,7 +118,7 @@ def house_card(house: dict, *, is_voted: bool = False, highlight: bool = False, 
         Div(image, cls="house-card-media"),
         Div(
             Span(source_label, cls=source_class),
-            H2(str(house.get("title", "Untitled listing")), cls="house-card-title"),
+            H2(str(house.get("title", "Anúncio sem título")), cls="house-card-title"),
             P(short_description, cls="house-card-description") if short_description else None,
             P(str(house["price"]), cls="house-card-price") if house.get("price") else None,
             Div(
@@ -126,7 +126,7 @@ def house_card(house: dict, *, is_voted: bool = False, highlight: bool = False, 
                 cls="house-card-vote-row",
             ),
             A(
-                "Open listing",
+                "Abrir anúncio",
                 href=str(house.get("url", "#")),
                 rel="noopener noreferrer",
                 target="_blank",
