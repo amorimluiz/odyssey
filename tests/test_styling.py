@@ -180,12 +180,16 @@ def test_css_defines_required_design_tokens() -> None:
         "--color-primary",
         "--color-primary-deep",
         "--color-on-primary",
+        "--color-success",
         "--color-ink-button",
         "--color-on-ink-button",
         "--color-canvas",
         "--color-hairline",
     ]:
         assert token in css
+
+    assert ".house-card-vote-btn.is-voted" in css
+    assert "var(--color-success)" in css
 
 
 def test_css_has_no_hex_literals_outside_root_block() -> None:
