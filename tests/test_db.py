@@ -11,6 +11,7 @@ from app.db import (
     _LibsqlConnectionAdapter,
     count_users,
     count_votes_for_house,
+    delete_house_with_votes,
     get_house_by_external_id,
     get_invite_token,
     get_user_by_username,
@@ -18,10 +19,12 @@ from app.db import (
     houses_ranked,
     init_schema,
     insert_house,
+    insert_manual_house,
     insert_user,
     set_invite_token,
     slugify,
     toggle_vote,
+    update_house_details,
     update_house_missing_metadata,
 )
 from app.errors import DuplicateHouseError
@@ -390,6 +393,153 @@ def test_insert_house_returns_persisted_row_id() -> None:
     assert int(row["id"]) == house_id
     assert row["source"] == "airbnb"
     assert row["external_id"] == "abc1"
+
+
+def test_insert_manual_house_persists_manual_source_and_generated_external_id() -> None:
+    db = Database(memory=True)
+    init_schema(db)
+    user_id = insert_user(db, name="User", username="user", password_hash="hash")
+
+    house_id = insert_manual_house(
+        db,
+        url="https://example.com/manual",
+        title="Manual House",
+        submitted_by=user_id,
+        image_url="https://example.com/manual.jpg",
+        description="A cozy place",
+        price="$123",
+    )
+
+    row = list(
+        db.query(
+            "SELECT id, source, external_id, url, title, image_url, description, price, submitted_by FROM houses WHERE id = ?",
+            [house_id],
+        )
+    )[0]
+    assert int(row["id"]) == house_id
+    assert row["source"] == "manual"
+    assert str(row["external_id"]).startswith("manual-")
+    assert row["url"] == "https://example.com/manual"
+    assert row["title"] == "Manual House"
+    assert row["image_url"] == "https://example.com/manual.jpg"
+    assert row["description"] == "A cozy place"
+    assert row["price"] == "$123"
+    assert int(row["submitted_by"]) == user_id
+
+
+def test_insert_manual_house_works_with_libsql_like_connection() -> None:
+    db = _libsql_like_db()
+    init_schema(db)
+    user_id = insert_user(db, name="User", username="user", password_hash="hash")
+
+    house_id = insert_manual_house(
+        db,
+        url="https://example.com/manual",
+        title="Manual House",
+        submitted_by=user_id,
+    )
+
+    row = list(db.query("SELECT source, external_id FROM houses WHERE id = ?", [house_id]))[0]
+    assert row["source"] == "manual"
+    assert str(row["external_id"]).startswith("manual-")
+
+
+def test_update_house_details_changes_only_visible_fields() -> None:
+    db = Database(memory=True)
+    init_schema(db)
+    user_id = insert_user(db, name="User", username="user", password_hash="hash")
+    house_id = insert_house(
+        db,
+        source="airbnb",
+        external_id="keep-source",
+        url="https://airbnb.com/rooms/original",
+        title="Original title",
+        image_url="https://example.com/original.jpg",
+        description="Original description",
+        price="$100",
+        submitted_by=user_id,
+    )
+
+    updated = update_house_details(
+        db,
+        house_id,
+        title="Updated title",
+        url="https://example.com/updated",
+        image_url=None,
+        description=None,
+        price="$200",
+    )
+
+    row = list(
+        db.query(
+            "SELECT source, external_id, url, title, image_url, description, price FROM houses WHERE id = ?",
+            [house_id],
+        )
+    )[0]
+    assert updated is True
+    assert row["source"] == "airbnb"
+    assert row["external_id"] == "keep-source"
+    assert row["url"] == "https://example.com/updated"
+    assert row["title"] == "Updated title"
+    assert row["image_url"] is None
+    assert row["description"] is None
+    assert row["price"] == "$200"
+
+
+def test_update_house_details_returns_false_for_unknown_id() -> None:
+    db = Database(memory=True)
+    init_schema(db)
+
+    assert update_house_details(
+        db,
+        999,
+        title="Updated title",
+        url="https://example.com/updated",
+        image_url=None,
+        description=None,
+        price=None,
+    ) is False
+
+
+def test_delete_house_with_votes_removes_votes_and_house() -> None:
+    db = Database(memory=True)
+    init_schema(db)
+    user_id = insert_user(db, name="User", username="user", password_hash="hash")
+    voter_id = insert_user(db, name="Voter", username="voter", password_hash="hash")
+    house_id = insert_house(
+        db,
+        source="airbnb",
+        external_id="delete-me",
+        url="https://airbnb.com/rooms/delete-me",
+        title="Delete me",
+        submitted_by=user_id,
+    )
+
+    db["votes"].insert({"user_id": voter_id, "house_id": house_id, "voted_at": "2026-01-01T00:00:00+00:00"})
+    db.conn.commit()
+
+    deleted = delete_house_with_votes(db, house_id)
+
+    assert deleted is True
+    assert db["houses"].count == 0
+    assert count_votes_for_house(db, house_id) == 0
+
+
+def test_delete_house_with_votes_returns_false_for_unknown_id() -> None:
+    db = Database(memory=True)
+    init_schema(db)
+    user_id = insert_user(db, name="User", username="user", password_hash="hash")
+    insert_house(
+        db,
+        source="airbnb",
+        external_id="keep-me",
+        url="https://airbnb.com/rooms/keep-me",
+        title="Keep me",
+        submitted_by=user_id,
+    )
+
+    assert delete_house_with_votes(db, 999) is False
+    assert db["houses"].count == 1
 
 
 def _seed_user_house(db: Database) -> tuple[int, int]:

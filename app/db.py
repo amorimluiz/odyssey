@@ -6,6 +6,7 @@ import logging
 import re
 import sqlite3
 import unicodedata
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -275,6 +276,33 @@ def insert_house(
     return int(row_id)
 
 
+def insert_manual_house(
+    db: Database,
+    *,
+    url: str,
+    title: str,
+    submitted_by: int,
+    image_url: str | None = None,
+    description: str | None = None,
+    price: str | None = None,
+    submitted_at: str | None = None,
+) -> int:
+    """Insert a manual house using a generated unique external_id."""
+    external_id = f"manual-{uuid.uuid4().hex}"
+    return insert_house(
+        db,
+        source="manual",
+        external_id=external_id,
+        url=url,
+        title=title,
+        submitted_by=submitted_by,
+        image_url=image_url,
+        description=description,
+        price=price,
+        submitted_at=submitted_at,
+    )
+
+
 def get_house_by_external_id(db: Database, source: str, external_id: str) -> dict[str, Any] | None:
     """Return house by unique key, or None."""
     rows = list(
@@ -290,6 +318,39 @@ def get_house_by_id(db: Database, house_id: int) -> dict[str, Any] | None:
     """Return house by id, or None."""
     rows = list(db.query("SELECT * FROM houses WHERE id = ? LIMIT 1", [house_id]))
     return dict(rows[0]) if rows else None
+
+
+def update_house_details(
+    db: Database,
+    house_id: int,
+    *,
+    title: str,
+    url: str,
+    image_url: str | None,
+    description: str | None,
+    price: str | None,
+) -> bool:
+    """Update only editable visible house fields."""
+    updates = {
+        "title": title,
+        "url": url,
+        "image_url": image_url,
+        "description": description,
+        "price": price,
+    }
+    assignments = ", ".join(f"{field} = ?" for field in updates)
+    params = list(updates.values()) + [house_id]
+    cur = db.execute(f"UPDATE houses SET {assignments} WHERE id = ?", params)
+    db.conn.commit()
+    return int(getattr(cur, "rowcount", 0)) > 0
+
+
+def delete_house_with_votes(db: Database, house_id: int) -> bool:
+    """Delete votes for a house and then the house row itself."""
+    db.execute("DELETE FROM votes WHERE house_id = ?", [house_id])
+    cur = db.execute("DELETE FROM houses WHERE id = ?", [house_id])
+    db.conn.commit()
+    return int(getattr(cur, "rowcount", 0)) > 0
 
 
 def houses_missing_metadata(db: Database) -> list[dict[str, Any]]:

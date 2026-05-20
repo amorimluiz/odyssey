@@ -6,7 +6,7 @@ import logging
 from starlette.testclient import TestClient
 
 from app.auth import hash_password, issue_token
-from app.db import get_db, init_schema, insert_house, insert_user
+from app.db import count_votes_for_house, get_db, init_schema, insert_house, insert_manual_house, insert_user
 from app.scraper import OGData, ParsedURL
 from app.components import house_card
 
@@ -132,6 +132,387 @@ def test_get_root_empty_state(monkeypatch, tmp_path) -> None:
 
     assert response.status_code == 200
     assert "Cole uma URL do Airbnb ou Booking acima para começar." in response.text
+    assert "Cadastrar manualmente" in response.text
+    assert 'hx-get="/houses/manual/new"' in response.text
+    assert 'id="house-modal"' in response.text
+    assert 'hx-on-click="window.__houseModalTrigger = this"' in response.text
+
+
+def test_get_root_admin_renders_delete_controls(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        user_id = _login_cookie(client, role="admin")
+        db = get_db()
+        insert_house(
+            db,
+            source="manual",
+            external_id="manual-admin",
+            url="https://example.com/manual-admin",
+            title="Casa admin",
+            submitted_by=user_id,
+        )
+
+        response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'hx-delete="/houses/' in response.text
+    assert "Excluir" in response.text
+
+
+def test_get_root_member_does_not_render_delete_controls(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        user_id = _login_cookie(client, role="member")
+        db = get_db()
+        insert_house(
+            db,
+            source="manual",
+            external_id="manual-member",
+            url="https://example.com/manual-member",
+            title="Casa member",
+            submitted_by=user_id,
+        )
+
+        response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'hx-delete="/houses/' not in response.text
+    assert "Excluir" not in response.text
+
+
+def test_manual_house_full_flow_updates_root_and_preserves_vote_state(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        creator_id = _login_cookie(client, role="member")
+        db = get_db()
+
+        create_response = client.post(
+            "/houses/manual",
+            data={
+                "title": "Casa manual original",
+                "url": "https://example.com/manual-original",
+            },
+        )
+        house_row = list(
+            db.query(
+                "SELECT id FROM houses WHERE submitted_by = ? AND url = ?",
+                [creator_id, "https://example.com/manual-original"],
+            )
+        )[0]
+        house_id = int(house_row["id"])
+
+        list_response = client.get("/")
+
+        voter_id = insert_user(
+            db,
+            name="Voter",
+            username="voter",
+            password_hash=hash_password("verysecure"),
+            role="member",
+        )
+        client.cookies.set("session", issue_token(voter_id, "member"))
+        vote_response = client.post(f"/houses/{house_id}/vote")
+
+        edit_response = client.put(
+            f"/houses/{house_id}",
+            data={
+                "title": "Casa manual atualizada",
+                "url": "https://example.com/manual-atualizada",
+                "image_url": "",
+                "description": "Descrição atualizada",
+                "price": "$250",
+            },
+        )
+        updated_list_response = client.get("/")
+
+    assert create_response.status_code == 200
+    assert "Casa manual original" in create_response.text
+    assert "Manual" in create_response.text
+
+    assert list_response.status_code == 200
+    assert "Casa manual original" in list_response.text
+
+    assert vote_response.status_code == 200
+    assert 'aria-pressed="true"' in vote_response.text
+    assert "Votado (1)" in vote_response.text
+
+    assert edit_response.status_code == 200
+    assert "Casa manual atualizada" in edit_response.text
+    assert "Votado (1)" in edit_response.text
+
+    assert updated_list_response.status_code == 200
+    assert "Casa manual atualizada" in updated_list_response.text
+
+
+def test_manual_house_duplicate_urls_are_allowed(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        user_id = _login_cookie(client)
+        db = get_db()
+
+        first_response = client.post(
+            "/houses/manual",
+            data={
+                "title": "Casa manual 1",
+                "url": "https://example.com/manual-duplicate",
+            },
+        )
+        second_response = client.post(
+            "/houses/manual",
+            data={
+                "title": "Casa manual 2",
+                "url": "https://example.com/manual-duplicate",
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+
+    rows = list(
+        db.query(
+            "SELECT title, url, source FROM houses WHERE submitted_by = ? ORDER BY id ASC",
+            [user_id],
+        )
+    )
+    assert len(rows) == 2
+    assert [row["title"] for row in rows] == ["Casa manual 1", "Casa manual 2"]
+    assert all(row["source"] == "manual" for row in rows)
+    assert {row["url"] for row in rows} == {"https://example.com/manual-duplicate"}
+
+
+def test_get_manual_house_form_unauthenticated_redirects(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        response = client.get("/houses/manual/new", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/login"
+
+
+def test_get_manual_house_form_authenticated_returns_modal(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        _login_cookie(client)
+        response = client.get("/houses/manual/new")
+
+    assert response.status_code == 200
+    assert 'id="house-modal"' in response.text
+    assert 'role="dialog"' in response.text
+    assert 'aria-modal="true"' in response.text
+    assert 'aria-labelledby="house-modal-title"' in response.text
+    assert 'hx-post="/houses/manual"' in response.text
+    assert 'hx-target="#house-list"' in response.text
+    assert 'autofocus' in response.text
+    assert 'tabindex="-1"' in response.text
+    assert "this.querySelector('#title')?.focus()" in response.text
+    assert "hx-on-keydown" in response.text
+    assert "Cadastrar casa manualmente" in response.text
+
+
+def test_post_manual_house_unauthenticated_redirects(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        response = client.post("/houses/manual", data={"title": "Casa", "url": "https://example.com/manual"}, follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/login"
+
+
+def test_post_manual_house_creates_manual_house(monkeypatch, tmp_path, caplog) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        user_id = _login_cookie(client)
+        with caplog.at_level(logging.INFO):
+            response = client.post(
+                "/houses/manual",
+                data={
+                    "title": "Casa manual",
+                    "url": "https://example.com/manual",
+                },
+            )
+
+    assert response.status_code == 200
+    assert 'hx-swap-oob="true"' in response.text
+    assert "window.__houseModalTrigger?.focus?.()" in response.text
+    assert "Manual" in response.text
+    rows = list(get_db().query("SELECT id, source, external_id, submitted_by, title, url, image_url, description, price FROM houses"))
+    assert len(rows) == 1
+    assert rows[0]["source"] == "manual"
+    assert str(rows[0]["external_id"]).startswith("manual-")
+    assert int(rows[0]["submitted_by"]) == user_id
+    assert rows[0]["title"] == "Casa manual"
+    assert rows[0]["url"] == "https://example.com/manual"
+    assert rows[0]["image_url"] is None
+    assert rows[0]["description"] is None
+    assert rows[0]["price"] is None
+    assert "event=manual_house_created" in caplog.text
+    assert "https://example.com/manual" not in caplog.text
+
+
+def test_post_manual_house_invalid_url_returns_422(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        _login_cookie(client)
+        response = client.post(
+            "/houses/manual",
+            data={
+                "title": "Casa manual",
+                "url": "notaurl",
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.headers["hx-retarget"] == "#house-modal"
+    assert response.headers["hx-reswap"] == "outerHTML"
+    assert response.headers["content-type"] == "text/html; charset=utf-8"
+    assert "error-fragment" in response.text
+    assert 'id="house-modal"' in response.text
+    assert 'role="alert"' in response.text
+    assert "URL" in response.text
+    assert 'hx-swap-oob="true"' not in response.text
+    assert get_db()["houses"].count == 0
+
+
+def test_get_edit_house_form_authenticated_returns_prefilled_modal(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        user_id = _login_cookie(client)
+        db = get_db()
+        house_id = insert_house(
+            db,
+            source="airbnb",
+            external_id="edit-form",
+            url="https://www.airbnb.com/rooms/edit-form",
+            title="Original title",
+            image_url="https://example.com/original.jpg",
+            description="Original description",
+            price="$100",
+            submitted_by=user_id,
+        )
+        response = client.get(f"/houses/{house_id}/edit")
+
+    assert response.status_code == 200
+    assert 'id="house-modal"' in response.text
+    assert 'role="dialog"' in response.text
+    assert 'aria-modal="true"' in response.text
+    assert 'aria-labelledby="house-modal-title"' in response.text
+    assert 'hx-put="/houses/' in response.text
+    assert 'autofocus' in response.text
+    assert 'tabindex="-1"' in response.text
+    assert "this.querySelector('#title')?.focus()" in response.text
+    assert 'value="Original title"' in response.text
+    assert 'value="https://www.airbnb.com/rooms/edit-form"' in response.text
+    assert 'value="https://example.com/original.jpg"' in response.text
+
+
+def test_put_house_updates_scraped_house_and_preserves_vote_state(monkeypatch, tmp_path, caplog) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        user_id = _login_cookie(client)
+        db = get_db()
+        house_id = insert_house(
+            db,
+            source="airbnb",
+            external_id="update-me",
+            url="https://www.airbnb.com/rooms/update-me",
+            title="Original title",
+            image_url="https://example.com/original.jpg",
+            description="Original description",
+            price="$100",
+            submitted_by=user_id,
+        )
+        vote_response = client.post(f"/houses/{house_id}/vote")
+        assert vote_response.status_code == 200
+        assert count_votes_for_house(db, house_id) == 1
+
+        with caplog.at_level(logging.INFO):
+            response = client.put(
+                f"/houses/{house_id}",
+                data={
+                    "title": "Updated title",
+                    "url": "https://example.com/updated",
+                    "image_url": "",
+                    "description": "Updated description",
+                    "price": "$200",
+                },
+            )
+
+    assert response.status_code == 200
+    assert 'hx-swap-oob="true"' in response.text
+    assert "window.__houseModalTrigger?.focus?.()" in response.text
+    assert "Updated title" in response.text
+    assert "Votado (1)" in response.text
+    row = list(get_db().query("SELECT source, external_id, title, url, image_url, description, price FROM houses WHERE id = ?", [house_id]))[0]
+    assert row["source"] == "airbnb"
+    assert row["external_id"] == "update-me"
+    assert row["title"] == "Updated title"
+    assert row["url"] == "https://example.com/updated"
+    assert row["image_url"] is None
+    assert row["description"] == "Updated description"
+    assert row["price"] == "$200"
+    assert "event=house_updated" in caplog.text
+    assert "https://example.com/updated" not in caplog.text
+
+
+def test_put_house_invalid_image_url_returns_422_and_keeps_row(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        user_id = _login_cookie(client)
+        db = get_db()
+        house_id = insert_manual_house(
+            db,
+            url="https://example.com/original",
+            title="Original title",
+            image_url="https://example.com/original.jpg",
+            description="Original description",
+            price="$100",
+            submitted_by=user_id,
+        )
+
+        response = client.put(
+            f"/houses/{house_id}",
+            data={
+                "title": "Original title",
+                "url": "https://example.com/original",
+                "image_url": "nota-url",
+                "description": "Original description",
+                "price": "$100",
+            },
+        )
+
+        row = list(
+            db.query(
+                "SELECT title, url, image_url, description, price FROM houses WHERE id = ?",
+                [house_id],
+            )
+        )[0]
+
+    assert response.status_code == 422
+    assert response.headers["hx-retarget"] == "#house-modal"
+    assert response.headers["hx-reswap"] == "outerHTML"
+    assert 'id="house-modal"' in response.text
+    assert 'role="alert"' in response.text
+    assert "URL da imagem" in response.text
+    assert 'hx-swap-oob="true"' not in response.text
+    assert row["title"] == "Original title"
+    assert row["url"] == "https://example.com/original"
+    assert row["image_url"] == "https://example.com/original.jpg"
+    assert row["description"] == "Original description"
+    assert row["price"] == "$100"
+
+
+def test_put_house_unknown_id_returns_404(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        _login_cookie(client)
+        response = client.put(
+            "/houses/999",
+            data={
+                "title": "Updated title",
+                "url": "https://example.com/updated",
+            },
+        )
+
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("text/plain; charset=utf-8")
+    assert response.text == "Casa não encontrada."
+
+
+def test_get_edit_house_unknown_id_returns_404(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        _login_cookie(client)
+        response = client.get("/houses/999/edit")
+
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("text/plain; charset=utf-8")
+    assert response.text == "Casa não encontrada."
 
 
 def test_post_houses_invalid_domain_returns_422(monkeypatch, tmp_path) -> None:
@@ -243,6 +624,90 @@ def test_post_houses_metadata_failure_returns_502_with_retryable_feedback(monkey
     assert "Não foi possível buscar os metadados do anúncio." in response.text
     assert "Tente novamente em alguns segundos." in response.text
     assert "error-fragment retryable" in response.text
+
+
+def test_post_houses_booking_missing_metadata_uses_manual_recovery(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        _login_cookie(client)
+        import app.routes as routes_module
+
+        async def fake_fetch(_url: str):
+            return None
+
+        monkeypatch.setattr(routes_module.scraper, "fetch_og", fake_fetch)
+        monkeypatch.setattr(
+            routes_module.scraper,
+            "last_fetch_meta",
+            lambda: {"status": 202, "elapsed_ms": 19, "failure_reason": "missing_title"},
+        )
+
+        response = client.post("/houses", data={"url": EXAMPLE_BOOKING_URL})
+
+    assert response.status_code == 502
+    assert "role=\"alert\"" in response.text
+    assert "Booking" in response.text
+    assert "Cadastrar manualmente" in response.text
+    assert "Tente novamente em alguns segundos." in response.text
+    assert get_db()["houses"].count == 0
+
+
+def test_post_houses_airbnb_missing_metadata_keeps_generic_recovery(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        _login_cookie(client)
+        import app.routes as routes_module
+
+        async def fake_fetch(_url: str):
+            return None
+
+        monkeypatch.setattr(routes_module.scraper, "fetch_og", fake_fetch)
+        monkeypatch.setattr(
+            routes_module.scraper,
+            "last_fetch_meta",
+            lambda: {"status": 202, "elapsed_ms": 19, "failure_reason": "missing_title"},
+        )
+
+        response = client.post("/houses", data={"url": EXAMPLE_AIRBNB_URL})
+
+    assert response.status_code == 502
+    assert "role=\"alert\"" in response.text
+    assert "Não foi possível buscar os metadados do anúncio." in response.text
+    assert "Cadastrar manualmente" not in response.text
+    assert "Tente novamente em alguns segundos." in response.text
+    assert get_db()["houses"].count == 0
+
+
+def test_post_houses_booking_success_creates_house(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        user_id = _login_cookie(client)
+        import app.routes as routes_module
+
+        async def fake_fetch(_url: str):
+            return OGData(
+                title="Booking House",
+                image_url="https://example.com/booking.jpg",
+                description="Description",
+                price="R$ 250",
+            )
+
+        monkeypatch.setattr(routes_module.scraper, "fetch_og", fake_fetch)
+        monkeypatch.setattr(routes_module.scraper, "last_fetch_meta", lambda: {"status": 202, "elapsed_ms": 19})
+
+        response = client.post("/houses", data={"url": EXAMPLE_BOOKING_URL})
+
+    assert response.status_code == 200
+    assert "Booking House" in response.text
+    assert "house-card-price" in response.text
+    rows = list(get_db().query("SELECT submitted_by, source, external_id, url, title, image_url, description, price FROM houses"))
+    assert len(rows) == 1
+    row = rows[0]
+    assert int(row["submitted_by"]) == user_id
+    assert row["source"] == "booking"
+    assert row["external_id"] == "villa-inn-economic"
+    assert row["url"] == "https://www.booking.com/hotel/br/villa-inn-economic.html"
+    assert row["title"] == "Booking House"
+    assert row["image_url"] == "https://example.com/booking.jpg"
+    assert row["description"] == "Description"
+    assert row["price"] == "R$ 250"
 
 
 def test_post_houses_duplicate_highlight_no_insert(monkeypatch, tmp_path) -> None:

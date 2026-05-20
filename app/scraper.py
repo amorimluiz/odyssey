@@ -411,6 +411,8 @@ async def fetch_og(url: str) -> OGData | None:
 
     _last_fetch_meta["status"] = int(response.status_code)
     _last_fetch_meta["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
+    # Public Booking pages can come back as challenge shells without OG tags.
+    # The product fallback for that case is the manual creation flow.
     parsed = _parse_og_markup(response.text)
     if parsed is None:
         _last_fetch_meta["failure_reason"] = "missing_title"

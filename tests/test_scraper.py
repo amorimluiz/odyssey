@@ -209,6 +209,12 @@ def test_og_parser_without_og_title_returns_none() -> None:
     assert _parse_og_markup(markup) is None
 
 
+def test_og_parser_without_booking_og_title_returns_none() -> None:
+    markup = (FIXTURE_DIR / "booking_public_no_og.html").read_text(encoding="utf-8")
+
+    assert _parse_og_markup(markup) is None
+
+
 @pytest.mark.asyncio
 async def test_fetch_og_success_with_mocked_http_response(
     httpx_mock,
@@ -239,6 +245,20 @@ async def test_fetch_og_non_2xx_returns_none(httpx_mock) -> None:
     meta = last_fetch_meta()
     assert meta["status"] == 403
     assert meta["failure_reason"] == "non_2xx"
+    assert meta["source"] == "booking"
+
+
+@pytest.mark.asyncio
+async def test_fetch_og_booking_public_no_og_records_missing_title(httpx_mock) -> None:
+    markup = (FIXTURE_DIR / "booking_public_no_og.html").read_text(encoding="utf-8")
+    httpx_mock.add_response(status_code=202, text=markup)
+
+    parsed = await fetch_og("https://www.booking.com/hotel/br/villa-inn-economic.html")
+
+    assert parsed is None
+    meta = last_fetch_meta()
+    assert meta["status"] == 202
+    assert meta["failure_reason"] == "missing_title"
     assert meta["source"] == "booking"
 
 

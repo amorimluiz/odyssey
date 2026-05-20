@@ -6,7 +6,7 @@ import logging
 from starlette.testclient import TestClient
 
 from app.auth import hash_password, issue_token
-from app.db import get_db, get_invite_token, init_schema, insert_house, insert_user, set_invite_token
+from app.db import count_votes_for_house, get_db, get_invite_token, init_schema, insert_house, insert_manual_house, insert_user, set_invite_token
 from app.scraper import OGData
 
 
@@ -181,6 +181,89 @@ def test_post_rotate_invite_member_forbidden(monkeypatch, tmp_path) -> None:
         response = client.post("/admin/rotate-invite")
 
     assert response.status_code == 403
+
+
+def test_delete_house_member_forbidden(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        member_id = _make_user(
+            name="Member",
+            username="member-delete",
+            role="member",
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        db = get_db()
+        house_id = insert_house(
+            db,
+            source="airbnb",
+            external_id="delete-forbidden",
+            url="https://www.airbnb.com/rooms/delete-forbidden",
+            title="Delete forbidden",
+            submitted_by=member_id,
+        )
+        client.cookies.set("session", issue_token(member_id, "member"))
+
+        response = client.delete(f"/houses/{house_id}")
+
+    assert response.status_code == 403
+
+
+def test_delete_house_admin_removes_house_and_votes(monkeypatch, tmp_path, caplog) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        admin_id = _make_user(
+            name="Admin",
+            username="admin-delete",
+            role="admin",
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        voter_id = _make_user(
+            name="Voter",
+            username="voter-delete",
+            role="member",
+            created_at="2026-01-02T00:00:00+00:00",
+        )
+        db = get_db()
+        house_id = insert_manual_house(
+            db,
+            url="https://example.com/delete-success",
+            title="Delete success",
+            submitted_by=admin_id,
+        )
+        db["votes"].insert({"user_id": voter_id, "house_id": house_id, "voted_at": "2026-01-03T00:00:00+00:00"})
+        db.conn.commit()
+        assert count_votes_for_house(db, house_id) == 1
+        _set_session(client, admin_id, "admin")
+        before_delete = client.get("/")
+
+        with caplog.at_level(logging.INFO):
+            response = client.delete(f"/houses/{house_id}")
+        after_delete = client.get("/")
+
+    assert response.status_code == 204
+    assert before_delete.status_code == 200
+    assert "Delete success" in before_delete.text
+    assert after_delete.status_code == 200
+    assert "Delete success" not in after_delete.text
+    assert get_db()["houses"].count == 0
+    assert count_votes_for_house(get_db(), house_id) == 0
+    assert "event=house_deleted" in caplog.text
+    assert "https://example.com/delete-success" not in caplog.text
+
+
+def test_delete_house_unknown_id_returns_404_with_utf8_charset(monkeypatch, tmp_path) -> None:
+    with _build_client(monkeypatch, tmp_path) as client:
+        admin_id = _make_user(
+            name="Admin",
+            username="admin-delete-missing",
+            role="admin",
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        _set_session(client, admin_id, "admin")
+
+        response = client.delete("/houses/999")
+
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("text/plain; charset=utf-8")
+    assert response.text == "Casa não encontrada."
 
 
 def test_post_refresh_metadata_unauthenticated_redirects_to_login(monkeypatch, tmp_path) -> None:
