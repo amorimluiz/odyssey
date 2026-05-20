@@ -90,6 +90,12 @@ def test_get_admin_uses_base_url_and_sorts_member_list(monkeypatch, tmp_path) ->
 
     assert response.status_code == 200
     assert "https://trip.example.com/invite/seed-token" in response.text
+    assert "Copiar" in response.text
+    assert "Rotacionar" in response.text
+    assert "Atualizar" in response.text
+    assert "admin-controls" in response.text
+    assert "admin-members" in response.text
+    assert "admin-invite-input" in response.text
     assert (
         response.text.find("2026-01-01T00:00:00+00:00")
         < response.text.find("2026-01-02T00:00:00+00:00")
@@ -135,6 +141,9 @@ def test_post_rotate_invite_updates_db_returns_fragment_and_invalidates_old_toke
 
     assert response.status_code == 200
     assert 'id="invite-link-fragment"' in response.text
+    assert "Copiar" in response.text
+    assert "Rotacionar" in response.text
+    assert 'hx-post="/admin/rotate-invite"' in response.text
     assert new_token is not None
     assert new_token != "oldtoken"
     assert get_invite_token(get_db()) == new_token
@@ -368,6 +377,8 @@ def test_post_refresh_metadata_scans_missing_rows_and_continues_after_failure(mo
 
     assert response.status_code == 200
     assert 'id="metadata-refresh-fragment"' in response.text
+    assert "Atualizar" in response.text
+    assert 'hx-post="/admin/refresh-metadata"' in response.text
     assert "Verificadas 3 casas. Atualizadas 2. Falhas: 1." in response.text
     assert len(fetch_calls) == 3
     assert "https://www.airbnb.com/rooms/complete" not in fetch_calls
@@ -426,6 +437,8 @@ def test_post_refresh_metadata_preserves_existing_fields_and_fills_only_missing_
         response = client.post("/admin/refresh-metadata")
 
     assert response.status_code == 200
+    assert "Atualizar" in response.text
+    assert 'hx-post="/admin/refresh-metadata"' in response.text
     assert "Verificadas 1 casas. Atualizadas 1. Falhas: 0." in response.text
     row = list(
         db.query(
@@ -463,3 +476,5 @@ def test_admin_panel_shows_username_column_not_email(monkeypatch, tmp_path) -> N
     assert "<th>Email</th>" not in response.text
     assert "<td>alice</td>" in response.text
     assert "<td>admin-user</td>" in response.text
+    assert "admin-controls" in response.text
+    assert "admin-members" in response.text

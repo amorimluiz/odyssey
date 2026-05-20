@@ -8,30 +8,30 @@ from fasthtml.common import Button, Div, H2, Input, P, Script, Table, Tbody, Td,
 def invite_link_fragment(invite_url: str) -> Div:
     """Render current invite URL plus copy and rotate controls."""
     return Div(
-        P("Link de convite atual"),
+        P("Link de convite atual", cls="admin-section-label"),
         Input(
             id="invite-link-input",
             type="text",
             value=invite_url,
             readonly=True,
-            cls="text-input",
+            cls="text-input admin-invite-input",
         ),
         Div(
             Button(
-                "Copiar link",
+                "Copiar",
                 type="button",
                 onclick="copyInviteLink()",
-                cls="btn btn-secondary",
+                cls="btn btn-secondary admin-action-btn",
             ),
             Button(
-                "Rotacionar link de convite",
+                "Rotacionar",
                 type="button",
                 hx_post="/admin/rotate-invite",
                 hx_target="#invite-link-fragment",
                 hx_swap="outerHTML",
-                cls="btn btn-primary",
+                cls="btn btn-primary admin-action-btn",
             ),
-            cls="admin-actions",
+            cls="admin-actions admin-actions-compact",
         ),
         Script(
             """
@@ -59,16 +59,16 @@ def metadata_refresh_fragment(*, scanned: int | None = None, updated: int | None
 
     return Div(
         Button(
-            "Atualizar metadados ausentes",
+            "Atualizar",
             type="button",
             hx_post="/admin/refresh-metadata",
             hx_target="#metadata-refresh-fragment",
             hx_swap="outerHTML",
-            cls="btn btn-secondary",
+            cls="btn btn-secondary admin-action-btn",
         ),
         summary,
         id="metadata-refresh-fragment",
-        cls="admin-actions admin-refresh",
+        cls="admin-actions admin-actions-compact admin-refresh",
     )
 
 
@@ -84,13 +84,19 @@ def admin_panel(*, invite_url: str, members: list[dict]) -> Div:
     ]
 
     return Div(
-        invite_link_fragment(invite_url),
-        metadata_refresh_fragment(),
-        H2("Membros", cls="section-title"),
-        Table(
-            Thead(Tr(Th("Nome"), Th("Nome de usuário"), Th("Data de entrada"))),
-            Tbody(*rows),
-            cls="members-table",
+        Div(
+            invite_link_fragment(invite_url),
+            metadata_refresh_fragment(),
+            cls="admin-controls",
+        ),
+        Div(
+            H2("Membros", cls="section-title admin-members-title"),
+            Table(
+                Thead(Tr(Th("Nome"), Th("Nome de usuário"), Th("Data de entrada"))),
+                Tbody(*rows),
+                cls="members-table",
+            ),
+            cls="admin-members",
         ),
         cls="admin-panel",
     )

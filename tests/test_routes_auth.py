@@ -557,7 +557,7 @@ def test_authenticated_header_logout_control_posts_to_logout(monkeypatch, tmp_pa
     logout_form = soup.find("form", {"action": "/logout"})
     assert logout_form is not None
     assert (logout_form.get("method") or "").lower() == "post"
-    assert logout_form.find("button", string="Sair") is not None
+    assert logout_form.find("button", attrs={"aria-label": "Sair"}) is not None
 
 
 def test_login_logout_login_again_round_trip(monkeypatch, tmp_path) -> None:

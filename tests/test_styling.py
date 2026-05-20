@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import importlib
 import re
+from pathlib import Path
 
 from starlette.requests import Request
 from starlette.testclient import TestClient
 
 from app.auth import hash_password, issue_token
-from app.components import base_layout, error_fragment, house_card, house_manual_form, house_modal_clear, house_modal_shell, house_submit_form, nav_header, vote_button
+from app.components import admin_panel, base_layout, error_fragment, house_card, house_manual_form, house_modal_clear, house_modal_shell, house_submit_form, invite_link_fragment, metadata_refresh_fragment, nav_header, vote_button
 from app.db import get_db, init_schema, insert_user, set_invite_token
 
 HEX_RE = re.compile(r"#[0-9a-fA-F]{6}")
@@ -47,8 +48,14 @@ def test_house_card_has_documented_classes() -> None:
     assert "house-card-title" in html
     assert "house-card-source" in html
     assert "house-card-image-placeholder" in html
-    assert "Abrir anúncio" in html
-    assert "Editar" in html
+    assert 'class="house-card-link"' in html
+    assert 'href="https://www.airbnb.com/rooms/1"' in html
+    assert 'target="_blank"' in html
+    assert 'rel="noopener noreferrer"' in html
+    assert 'class="house-card-action-zone"' in html
+    assert "Abrir anúncio" not in html
+    assert 'aria-label="Editar casa"' in html
+    assert 'hx-delete="/houses/' not in html
     assert 'hx-on-click="window.__houseModalTrigger = this"' in html
 
 
@@ -72,16 +79,21 @@ def test_house_card_renders_manual_badge_and_admin_actions() -> None:
     assert "Manual" in html
     assert "badge-source-manual" in html
     assert 'hx-get="/houses/7/edit"' in html
-    assert "Editar" in html
+    assert "✎" in html
+    assert 'aria-label="Editar casa"' in html
     assert 'hx-on-click="window.__houseModalTrigger = this"' in html
     assert 'hx-delete="/houses/7"' in html
-    assert "Excluir" in html
+    assert "🗑" in html
+    assert 'aria-label="Excluir casa"' in html
 
 
 def test_house_submit_form_exposes_manual_entry_point_and_modal_host() -> None:
     html = repr(house_submit_form())
 
-    assert "Adicionar casa" in html
+    assert "house-submit-row" in html
+    assert "house-submit-icon-btn" in html
+    assert 'aria-label="Adicionar casa pela URL"' in html
+    assert ">Adicionar casa<" not in html
     assert "Cadastrar manualmente" in html
     assert 'hx-get="/houses/manual/new"' in html
     assert 'hx-target="#house-modal"' in html
@@ -146,6 +158,9 @@ def test_house_modal_shell_has_dialog_semantics() -> None:
     assert 'autofocus' in html
     assert "hx-on--after-swap" in html
     assert "hx-on-keydown" in html
+    assert "hx-on-click" in html
+    assert "event.stopPropagation()" in html
+    assert "event.target !== this" in html
 
 
 def test_house_modal_clear_restores_focus_on_swap() -> None:
@@ -156,13 +171,29 @@ def test_house_modal_clear_restores_focus_on_swap() -> None:
     assert "window.__houseModalTrigger?.focus?.()" in html
 
 
+def test_invite_and_refresh_fragments_use_compact_labels() -> None:
+    invite_html = repr(invite_link_fragment("https://example.com/invite/token"))
+    refresh_html = repr(metadata_refresh_fragment(scanned=2, updated=1, failed=0))
+
+    assert "Copiar" in invite_html
+    assert "Rotacionar" in invite_html
+    assert 'hx-post="/admin/rotate-invite"' in invite_html
+    assert "copyInviteLink()" in invite_html
+    assert 'class="text-input admin-invite-input"' in invite_html
+    assert "Atualizar" in refresh_html
+    assert 'hx-post="/admin/refresh-metadata"' in refresh_html
+    assert "Verificadas 2 casas. Atualizadas 1. Falhas: 0." in refresh_html
+
+
 def test_vote_button_toggled_class_and_aria_pressed() -> None:
     html = repr(vote_button({"id": 7, "vote_count": 4}, is_voted=True))
 
     assert "house-card-vote-btn" in html
     assert "is-voted" in html
     assert 'aria-pressed="true"' in html
-    assert "Votado (4)" in html
+    assert 'aria-label="Remover voto desta casa"' in html
+    assert "♥" in html
+    assert "4" in html
 
 
 def test_nav_header_admin_has_styled_admin_link(monkeypatch) -> None:
@@ -193,6 +224,17 @@ def test_base_layout_includes_single_viewport_meta_tag() -> None:
     html = str(base_layout("hello", title="Votação de Casas do Grupo"))
 
     _assert_viewport_meta_once(html)
+
+
+def test_admin_css_exposes_compact_spacing_hooks() -> None:
+    css = Path("static/style.css").read_text()
+
+    assert ".admin-actions-compact" in css
+    assert ".admin-invite-input" in css
+    assert ".admin-controls" in css
+    assert ".admin-members" in css
+    assert ".members-table" in css
+    assert "padding-top: var(--space-xl);" in css
 
 
 def test_get_root_includes_single_stylesheet_link(monkeypatch, tmp_path) -> None:
@@ -293,13 +335,25 @@ def test_css_defines_required_design_tokens() -> None:
     ]:
         assert token in css
 
+    assert ".house-card-vote-btn.is-neutral" in css
     assert ".house-card-vote-btn.is-voted" in css
-    assert "var(--color-success)" in css
+    vote_rule = re.search(r"\.house-card-vote-btn\.is-voted\s*\{(?P<body>.*?)\}", css, re.S)
+    assert vote_rule is not None
+    assert "var(--color-success)" not in vote_rule.group("body")
+    assert ".house-submit-row" in css
+    assert ".house-submit-icon-btn" in css
     for selector in [
         ".house-modal",
         ".house-modal-panel",
+        ".house-card-link",
+        ".house-card-content",
         ".house-card-actions",
+        ".house-card-action-zone",
         ".house-card-action",
+        ".house-card-icon-btn",
+        ".house-card-action-icon",
+        ".house-card-description",
+        ".house-card-price",
         ".btn-danger",
         ".badge-source-manual",
         ".house-submit-stack",

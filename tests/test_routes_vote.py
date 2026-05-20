@@ -56,7 +56,11 @@ def test_vote_button_renders_voted_variant() -> None:
     html = repr(vote_button({"id": 10, "vote_count": 3}, is_voted=True))
 
     assert 'aria-pressed="true"' in html
-    assert "Votado (3)" in html
+    assert 'aria-label="Remover voto desta casa"' in html
+    assert "house-card-vote-btn" in html
+    assert "is-voted" in html
+    assert "♥" in html
+    assert "3" in html
     assert 'hx-post="/houses/10/vote"' in html
     assert 'hx-swap="outerHTML"' in html
 
@@ -65,7 +69,11 @@ def test_vote_button_renders_unvoted_variant() -> None:
     html = repr(vote_button({"id": 11, "vote_count": 0}, is_voted=False))
 
     assert 'aria-pressed="false"' in html
-    assert "Votar (0)" in html
+    assert 'aria-label="Votar nesta casa"' in html
+    assert "house-card-vote-btn" in html
+    assert "is-neutral" in html
+    assert "♡" in html
+    assert "0" in html
 
 
 def test_vote_toggle_authenticated_vote_then_unvote(monkeypatch, tmp_path) -> None:
@@ -79,11 +87,15 @@ def test_vote_toggle_authenticated_vote_then_unvote(monkeypatch, tmp_path) -> No
 
     assert first.status_code == 200
     assert 'aria-pressed="true"' in first.text
-    assert "Votado (1)" in first.text
+    assert 'aria-label="Remover voto desta casa"' in first.text
+    assert "♥" in first.text
+    assert ">1<" in first.text
 
     assert second.status_code == 200
     assert 'aria-pressed="false"' in second.text
-    assert "Votar (0)" in second.text
+    assert 'aria-label="Votar nesta casa"' in second.text
+    assert "♡" in second.text
+    assert ">0<" in second.text
 
     assert count_votes_for_house(get_db(), house_id) == 0
 
@@ -121,19 +133,27 @@ def test_vote_toggle_cross_user_isolation_and_double_toggle(monkeypatch, tmp_pat
         _set_session(client, user_b)
         r2 = client.post(f"/houses/{house_id}/vote")
 
-        assert "Votado (1)" in r1.text
-        assert "Votado (2)" in r2.text
+        assert 'aria-label="Remover voto desta casa"' in r1.text
+        assert 'aria-label="Remover voto desta casa"' in r2.text
+        assert "♥" in r1.text
+        assert "♥" in r2.text
+        assert ">1<" in r1.text
+        assert ">2<" in r2.text
         assert count_votes_for_house(get_db(), house_id) == 2
 
         r3 = client.post(f"/houses/{house_id}/vote")
         assert 'aria-pressed="false"' in r3.text
-        assert "Votar (1)" in r3.text
+        assert 'aria-label="Votar nesta casa"' in r3.text
+        assert "♡" in r3.text
+        assert ">1<" in r3.text
         assert count_votes_for_house(get_db(), house_id) == 1
 
         _set_session(client, user_a)
         r4 = client.post(f"/houses/{house_id}/vote")
         assert 'aria-pressed="false"' in r4.text
-        assert "Votar (0)" in r4.text
+        assert 'aria-label="Votar nesta casa"' in r4.text
+        assert "♡" in r4.text
+        assert ">0<" in r4.text
         assert count_votes_for_house(get_db(), house_id) == 0
 
 

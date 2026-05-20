@@ -4,17 +4,40 @@ from __future__ import annotations
 
 from typing import Any
 
-from fasthtml.common import A, Button, Div, Form, H2, Img, Input, Label, P, Span
+from fasthtml.common import A, Button, Div, Form, H2, Img, Input, Label, NotStr, P, Span
+
+
+SEARCH_ICON_SVG = NotStr(
+    '<svg class="house-submit-icon" viewBox="0 0 24 24" width="20" height="20" '
+    'fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" '
+    'stroke-linejoin="round" aria-hidden="true" focusable="false">'
+    '<circle cx="11" cy="11" r="7"></circle>'
+    '<path d="M20 20l-3.5-3.5"></path>'
+    "</svg>"
+)
+
+PLUS_ICON_SVG = NotStr(
+    '<svg class="house-submit-icon" viewBox="0 0 24 24" width="20" height="20" '
+    'fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" '
+    'stroke-linejoin="round" aria-hidden="true" focusable="false">'
+    '<path d="M12 5v14M5 12h14"></path>'
+    "</svg>"
+)
 
 
 MODAL_FOCUS_RETURN_JS = "window.__houseModalTrigger?.focus?.(); window.__houseModalTrigger = null;"
 MODAL_INITIAL_FOCUS_JS = "setTimeout(() => this.querySelector('#title')?.focus(), 10);"
+MODAL_CLOSE_JS = (
+    "const modal = this.closest('#house-modal'); "
+    "if (modal) modal.outerHTML = '<div id=\"house-modal\" class=\"house-modal-host\"></div>'; "
+    f"{MODAL_FOCUS_RETURN_JS}"
+)
+MODAL_BACKDROP_CLICK_JS = f"if (event.target !== this) return; {MODAL_CLOSE_JS}"
+MODAL_PANEL_CLICK_JS = "event.stopPropagation();"
 MODAL_KEYDOWN_JS = (
     "if (event.key === 'Escape') { "
     "event.preventDefault(); "
-    "const modal = this.closest('#house-modal'); "
-    "if (modal) modal.outerHTML = '<div id=\"house-modal\" class=\"house-modal-host\"></div>'; "
-    f"{MODAL_FOCUS_RETURN_JS} "
+    f"{MODAL_CLOSE_JS} "
     "return; "
     "} "
     "if (event.key !== 'Tab') return; "
@@ -45,31 +68,37 @@ def house_submit_form() -> Div:
     """Render the scraper form, manual entry trigger, and modal host."""
     return Div(
         Form(
-            Input(
-                id="house-url",
-                name="url",
-                type="url",
-                placeholder="https://www.airbnb.com/rooms/12345678",
-                required=True,
-                cls="text-input",
+            Div(
+                Input(
+                    id="house-url",
+                    name="url",
+                    type="url",
+                    placeholder="https://www.airbnb.com/rooms/12345678",
+                    required=True,
+                    cls="text-input house-submit-input",
+                ),
+                Button(
+                    SEARCH_ICON_SVG,
+                    type="submit",
+                    aria_label="Adicionar casa pela URL",
+                    cls="btn house-submit-icon-btn",
+                ),
+                Button(
+                    PLUS_ICON_SVG,
+                    type="button",
+                    aria_label="Cadastrar manualmente",
+                    hx_get="/houses/manual/new",
+                    hx_target="#house-modal",
+                    hx_swap="outerHTML",
+                    hx_on_click="window.__houseModalTrigger = this",
+                    cls="btn house-submit-icon-btn",
+                ),
+                cls="house-submit-row",
             ),
-            Button("Adicionar casa", type="submit", cls="btn btn-primary"),
             hx_post="/houses",
             hx_target="#house-list",
             hx_swap="afterbegin",
             cls="house-submit-form",
-        ),
-        Div(
-            Button(
-                "Cadastrar manualmente",
-                type="button",
-                hx_get="/houses/manual/new",
-                hx_target="#house-modal",
-                hx_swap="outerHTML",
-                hx_on_click="window.__houseModalTrigger = this",
-                cls="btn btn-secondary",
-            ),
-            cls="house-submit-actions",
         ),
         Div(id="house-modal", cls="house-modal-host"),
         cls="house-submit-stack",
@@ -116,6 +145,7 @@ def house_modal_shell(title: str, form: Form, *, description: str | None = None)
             form,
             cls="house-modal-panel",
             tabindex="-1",
+            hx_on_click=MODAL_PANEL_CLICK_JS,
             hx_on_keydown=MODAL_KEYDOWN_JS,
         ),
         id="house-modal",
@@ -123,6 +153,7 @@ def house_modal_shell(title: str, form: Form, *, description: str | None = None)
         aria_modal="true",
         aria_labelledby="house-modal-title",
         cls="house-modal",
+        hx_on_click=MODAL_BACKDROP_CLICK_JS,
         hx_on__after_swap=MODAL_INITIAL_FOCUS_JS,
     )
 
@@ -137,20 +168,29 @@ def house_modal_clear() -> Div:
     )
 
 
-def vote_button(house: dict, is_voted: bool) -> Button:
-    """Render HTMX vote toggle button fragment."""
+def vote_button(house: dict, is_voted: bool) -> Div:
+    """Render HTMX vote toggle cell: heart button + adjacent count outside the click target."""
+    house_id = house.get("id")
     vote_count = int(house.get("vote_count", 0))
-    label = "Votado" if is_voted else "Votar"
-    btn_class = "btn house-card-vote-btn is-voted" if is_voted else "btn house-card-vote-btn"
-    return Button(
-        f"{label} ({vote_count})",
-        type="button",
-        id=f'vote-button-{house.get("id")}',
-        aria_pressed="true" if is_voted else "false",
-        hx_post=f'/houses/{house.get("id")}/vote',
-        hx_target="this",
-        hx_swap="outerHTML",
-        cls=btn_class,
+    btn_class = "house-card-vote-btn is-voted" if is_voted else "house-card-vote-btn is-neutral"
+    icon = "♥" if is_voted else "♡"
+    label = "Remover voto desta casa" if is_voted else "Votar nesta casa"
+    cell_id = f"vote-cell-{house_id}"
+    return Div(
+        Button(
+            Span(icon, aria_hidden="true", cls="house-card-vote-icon"),
+            type="button",
+            id=f"vote-button-{house_id}",
+            aria_label=label,
+            aria_pressed="true" if is_voted else "false",
+            hx_post=f"/houses/{house_id}/vote",
+            hx_target=f"#{cell_id}",
+            hx_swap="outerHTML",
+            cls=btn_class,
+        ),
+        Span(str(vote_count), cls="house-card-vote-count"),
+        id=cell_id,
+        cls="house-card-vote",
     )
 
 
@@ -180,34 +220,35 @@ def house_card(
         source_label = "Manual"
         source_class = "house-card-source badge-source-manual"
 
-    actions = []
+    actions: list[Any] = []
     house_id = house.get("id")
     if can_edit and house_id is not None:
         actions.append(
             Button(
-                "Editar",
+                Span("✎", aria_hidden="true", cls="house-card-action-icon"),
                 type="button",
                 aria_label="Editar casa",
                 hx_get=f"/houses/{house_id}/edit",
                 hx_target="#house-modal",
                 hx_swap="outerHTML",
                 hx_on_click="window.__houseModalTrigger = this",
-                cls="btn btn-secondary house-card-action",
+                cls="house-card-action house-card-icon-btn",
             )
         )
     if can_delete and house_id is not None:
         actions.append(
             Button(
-                "Excluir",
+                Span("🗑", aria_hidden="true", cls="house-card-action-icon"),
                 type="button",
                 aria_label="Excluir casa",
                 hx_delete=f"/houses/{house_id}",
                 hx_target=f"#house-{house_id}",
                 hx_swap="delete",
                 hx_confirm="Tem certeza que deseja excluir esta casa?",
-                cls="btn btn-danger house-card-action house-card-action-danger",
+                cls="house-card-action house-card-icon-btn house-card-action-danger",
             )
         )
+    actions.append(vote_button(house, is_voted))
 
     card_classes = "house-card"
     if highlight:
@@ -217,20 +258,19 @@ def house_card(
     if oob:
         attrs["hx_swap_oob"] = "true"
 
+    price_value = str(house.get("price") or "").strip()
+    footer_children: list[Any] = []
+    if price_value:
+        footer_children.append(P(price_value, cls="house-card-price"))
+    footer_children.append(Div(*actions, cls="house-card-actions"))
+
     return Div(
         Div(image, cls="house-card-media"),
         Div(
-            Span(source_label, cls=source_class),
-            H2(str(house.get("title", "Anúncio sem título")), cls="house-card-title"),
-            P(short_description, cls="house-card-description") if short_description else None,
-            P(str(house["price"]), cls="house-card-price") if house.get("price") else None,
-            Div(*actions, cls="house-card-actions") if actions else None,
-            Div(
-                vote_button(house, is_voted),
-                cls="house-card-vote-row",
-            ),
             A(
-                "Abrir anúncio",
+                Span(source_label, cls=source_class),
+                H2(str(house.get("title", "Anúncio sem título")), cls="house-card-title"),
+                P(short_description, cls="house-card-description") if short_description else None,
                 href=str(house.get("url", "#")),
                 rel="noopener noreferrer",
                 target="_blank",
@@ -238,6 +278,7 @@ def house_card(
             ),
             cls="house-card-content",
         ),
+        Div(*footer_children, cls="house-card-action-zone"),
         id=f'house-{house.get("id")}',
         cls=card_classes,
         **attrs,
