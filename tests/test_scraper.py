@@ -275,4 +275,4 @@ async def test_fetch_og_sends_expected_headers(httpx_mock) -> None:
 
     request = httpx_mock.get_requests()[0]
     assert "Chrome/124.0.0.0" in request.headers["User-Agent"]
-    assert request.headers["Accept-Language"] == "en-US,en;q=0.9"
+    assert request.headers["Accept-Language"] == "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
