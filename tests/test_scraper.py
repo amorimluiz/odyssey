@@ -4,8 +4,17 @@ from pathlib import Path
 
 import httpx
 import pytest
+from bs4 import BeautifulSoup
 
-from app.scraper import OGData, _parse_og_markup, fetch_og, last_fetch_meta, parse_url
+from app.scraper import (
+    OGData,
+    AirbnbScraper,
+    BookingScraper,
+    _parse_og_markup,
+    fetch_og,
+    last_fetch_meta,
+    parse_url,
+)
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
@@ -24,6 +33,10 @@ def _extract_urls(text: str) -> tuple[str, str]:
     urls = [line.strip() for line in text.splitlines() if line.strip().startswith("https://")]
     assert len(urls) >= 2
     return urls[0], urls[1]
+
+
+def _read_fixture(name: str) -> str:
+    return (FIXTURE_DIR / name).read_text(encoding="utf-8")
 
 
 def test_parse_airbnb_example_url_contract() -> None:
@@ -138,6 +151,45 @@ def test_parse_accepts_airbnb_regional_tld() -> None:
     assert parsed.normalized == "https://www.airbnb.com/rooms/32311963"
 
 
+def test_airbnb_enrich_from_html_matches_fixture() -> None:
+    markup = _read_fixture("airbnb_html_price.html")
+    soup = BeautifulSoup(markup, "html.parser")
+
+    assert AirbnbScraper().enrich_from_html(soup) == "R$ 450"
+
+
+def test_airbnb_enrich_from_html_returns_none_without_match() -> None:
+    soup = BeautifulSoup("<html><body><span class='other'>R$ 450</span></body></html>", "html.parser")
+
+    assert AirbnbScraper().enrich_from_html(soup) is None
+
+
+def test_booking_enrich_from_html_matches_fixture() -> None:
+    markup = _read_fixture("booking_html_price.html")
+    soup = BeautifulSoup(markup, "html.parser")
+
+    assert BookingScraper().enrich_from_html(soup) == "R$ 900"
+
+
+def test_booking_enrich_from_html_returns_none_without_match() -> None:
+    soup = BeautifulSoup("<html><body><span class='other'>R$ 900</span></body></html>", "html.parser")
+
+    assert BookingScraper().enrich_from_html(soup) is None
+
+
+@pytest.mark.parametrize(
+    "selectors",
+    [
+        AirbnbScraper._PRICE_SELECTORS,
+        BookingScraper._PRICE_SELECTORS,
+    ],
+)
+def test_price_selector_depth_invariant(selectors: list[str]) -> None:
+    for selector in selectors:
+        combinator_count = sum(selector.count(char) for char in (">", "+", "~", " "))
+        assert combinator_count <= 3
+
+
 def test_og_parser_full_data_fixture() -> None:
     markup = (FIXTURE_DIR / "airbnb_listing.html").read_text(encoding="utf-8")
 
@@ -186,6 +238,72 @@ def test_og_parser_og_description_fixture() -> None:
         title="Villa Inn Economic",
         image_url=None,
         description=None,
+        price=None,
+    )
+
+
+def test_og_parser_airbnb_html_fallback_fixture() -> None:
+    body = _read_fixture("airbnb_html_price.html")
+    markup = f"""
+    <html>
+      <head>
+        <meta property="og:title" content="Airbnb Fallback Listing" />
+        <meta property="og:description" content="Simple listing without trusted price" />
+      </head>
+      <body>{body}</body>
+    </html>
+    """
+
+    parsed = _parse_og_markup(markup, source="airbnb")
+
+    assert parsed == OGData(
+        title="Airbnb Fallback Listing",
+        image_url=None,
+        description="Simple listing without trusted price",
+        price="R$ 450",
+    )
+
+
+def test_og_parser_booking_html_fallback_fixture() -> None:
+    body = _read_fixture("booking_html_price.html")
+    markup = f"""
+    <html>
+      <head>
+        <meta property="og:title" content="Booking Fallback Listing" />
+        <meta property="og:description" content="Simple listing without trusted price" />
+      </head>
+      <body>{body}</body>
+    </html>
+    """
+
+    parsed = _parse_og_markup(markup, source="booking")
+
+    assert parsed == OGData(
+        title="Booking Fallback Listing",
+        image_url=None,
+        description="Simple listing without trusted price",
+        price="R$ 900",
+    )
+
+
+def test_og_parser_with_none_source_skips_html_fallback() -> None:
+    body = _read_fixture("booking_html_price.html")
+    markup = f"""
+    <html>
+      <head>
+        <meta property="og:title" content="Fallback Skipped Listing" />
+        <meta property="og:description" content="Simple listing without trusted price" />
+      </head>
+      <body>{body}</body>
+    </html>
+    """
+
+    parsed = _parse_og_markup(markup, source=None)
+
+    assert parsed == OGData(
+        title="Fallback Skipped Listing",
+        image_url=None,
+        description="Simple listing without trusted price",
         price=None,
     )
 

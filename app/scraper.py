@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import time
 import re
 from decimal import Decimal, InvalidOperation
+from typing import Protocol
 from urllib.parse import parse_qsl, urlencode, urlparse
 
 from bs4 import BeautifulSoup
@@ -81,6 +82,80 @@ class OGData:
     price: str | None
 
 
+class ScraperStrategy(Protocol):
+    def parse_url(self, path_parts: list[str], parsed_url) -> ParsedURL | None:
+        ...
+
+    def enrich_from_html(self, soup: BeautifulSoup) -> str | None:
+        ...
+
+
+class AirbnbScraper:
+    _PRICE_SELECTORS: list[str] = [
+        "span[data-testid='price-and-discounted-price']",
+        "._tyxjp1",
+    ]
+
+    def parse_url(self, path_parts: list[str], parsed_url) -> ParsedURL | None:
+        if len(path_parts) < 2 or path_parts[0] != "rooms":
+            return None
+
+        room_id = path_parts[1]
+        if not room_id.isdigit():
+            return None
+
+        normalized = f"https://{AIRBNB_CANONICAL_HOST}/rooms/{room_id}"
+        return ParsedURL(source="airbnb", external_id=room_id, normalized=normalized, fetch_url=normalized)
+
+    def enrich_from_html(self, soup: BeautifulSoup) -> str | None:
+        for selector in self._PRICE_SELECTORS:
+            tag = soup.select_one(selector)
+            if tag:
+                return _extract_price(tag.get_text(strip=True))
+        return None
+
+
+class BookingScraper:
+    _PRICE_SELECTORS: list[str] = [
+        "span[data-testid='price-and-discounted-price']",
+        ".prco-valign__topright",
+        ".bui-price-display__value",
+    ]
+
+    def parse_url(self, path_parts: list[str], parsed_url) -> ParsedURL | None:
+        if len(path_parts) != 3:
+            return None
+        if path_parts[0] != "hotel":
+            return None
+
+        cc = path_parts[1].lower()
+        filename = path_parts[2]
+        if not filename.endswith(".html"):
+            return None
+
+        stem = filename[: -len(".html")]
+        slug = _strip_locale_suffix(stem)
+        if not slug:
+            return None
+
+        normalized = f"https://{BOOKING_CANONICAL_HOST}/hotel/{cc}/{slug}.html"
+        fetch_url = _build_booking_fetch_url(normalized, parsed_url.query)
+        return ParsedURL(source="booking", external_id=slug, normalized=normalized, fetch_url=fetch_url)
+
+    def enrich_from_html(self, soup: BeautifulSoup) -> str | None:
+        for selector in self._PRICE_SELECTORS:
+            tag = soup.select_one(selector)
+            if tag:
+                return _extract_price(tag.get_text(strip=True))
+        return None
+
+
+_STRATEGY_REGISTRY: dict[str, ScraperStrategy] = {
+    "airbnb": AirbnbScraper(),
+    "booking": BookingScraper(),
+}
+
+
 def parse_url(raw: str) -> ParsedURL | None:
     if not raw or not raw.strip():
         return None
@@ -96,11 +171,14 @@ def parse_url(raw: str) -> ParsedURL | None:
     path = parsed.path.rstrip("/")
     path_parts = [segment for segment in path.split("/") if segment]
 
-    if _is_airbnb_host(hostname):
-        return _parse_airbnb(path_parts)
-    if _is_booking_host(hostname):
-        return _parse_booking(path_parts, parsed)
-    return None
+    source = _detect_source(hostname)
+    if source is None:
+        return None
+
+    strategy = _STRATEGY_REGISTRY.get(source)
+    if strategy is None:
+        return None
+    return strategy.parse_url(path_parts, parsed)
 
 
 def _is_airbnb_host(hostname: str) -> bool:
@@ -112,37 +190,12 @@ def _is_booking_host(hostname: str) -> bool:
     return hostname in {"booking.com", BOOKING_CANONICAL_HOST}
 
 
-def _parse_airbnb(path_parts: list[str]) -> ParsedURL | None:
-    if len(path_parts) < 2 or path_parts[0] != "rooms":
-        return None
-
-    room_id = path_parts[1]
-    if not room_id.isdigit():
-        return None
-
-    normalized = f"https://{AIRBNB_CANONICAL_HOST}/rooms/{room_id}"
-    return ParsedURL(source="airbnb", external_id=room_id, normalized=normalized, fetch_url=normalized)
-
-
-def _parse_booking(path_parts: list[str], parsed_url) -> ParsedURL | None:
-    if len(path_parts) != 3:
-        return None
-    if path_parts[0] != "hotel":
-        return None
-
-    cc = path_parts[1].lower()
-    filename = path_parts[2]
-    if not filename.endswith(".html"):
-        return None
-
-    stem = filename[: -len(".html")]
-    slug = _strip_locale_suffix(stem)
-    if not slug:
-        return None
-
-    normalized = f"https://{BOOKING_CANONICAL_HOST}/hotel/{cc}/{slug}.html"
-    fetch_url = _build_booking_fetch_url(normalized, parsed_url.query)
-    return ParsedURL(source="booking", external_id=slug, normalized=normalized, fetch_url=fetch_url)
+def _detect_source(hostname: str) -> str | None:
+    if _is_airbnb_host(hostname):
+        return "airbnb"
+    if _is_booking_host(hostname):
+        return "booking"
+    return None
 
 
 def _strip_locale_suffix(stem: str) -> str:
@@ -357,7 +410,7 @@ def _extract_trusted_price(soup: BeautifulSoup) -> str | None:
     return _extract_price(description)
 
 
-def _parse_og_markup(markup: str) -> OGData | None:
+def _parse_og_markup(markup: str, source: str | None = None) -> OGData | None:
     soup = BeautifulSoup(markup, "html.parser")
 
     title = _extract_og_content(soup, "og:title")
@@ -367,6 +420,8 @@ def _parse_og_markup(markup: str) -> OGData | None:
     image_url = _extract_og_content(soup, "og:image")
     description = _extract_og_content(soup, "og:description")
     price = _extract_trusted_price(soup)
+    if price is None and source in _STRATEGY_REGISTRY:
+        price = _STRATEGY_REGISTRY[source].enrich_from_html(soup)
 
     return OGData(
         title=title,
@@ -411,7 +466,7 @@ async def fetch_og(url: str) -> OGData | None:
 
     _last_fetch_meta["status"] = int(response.status_code)
     _last_fetch_meta["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
-    parsed = _parse_og_markup(response.text)
+    parsed = _parse_og_markup(response.text, source=source)
     if parsed is None:
         _last_fetch_meta["failure_reason"] = "missing_title"
         return None
