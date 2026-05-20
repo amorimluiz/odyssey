@@ -18,6 +18,7 @@ Guia de skills e regras operacionais para agentes neste repositório.
 3. Para UI/HTML/FastHTML visual, usar `design-md` antes de alterar componentes e seguir `DESIGN.md` (tokens, tipografia, espaçamento, raio, sombra e padrões de componente).
 4. Para FastHTML/MonsterUI/HTMX/Starlette, usar `context7` antes da implementação e validar atributos/estratégias com documentação atual.
 5. Para interação de navegador, usar Playwright MCP para navegação, formulários, validação visual e fluxos E2E.
+6. Salvar qualquer plano gerado em um arquivo temporário antes de prosseguir.
 
 ## Sequência Recomendada (FastHTML + UI)
 

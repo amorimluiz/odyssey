@@ -9,14 +9,14 @@ from time import perf_counter
 import uuid
 from typing import Protocol
 
-from fasthtml.common import Button, Div, FastHTML, Form, Input, Label, P, to_xml
+from fasthtml.common import A, Button, Div, FastHTML, Form, Input, Label, P, to_xml
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
 from app.auth import clear_session_cookie, current_user, hash_password, issue_token, require_admin, require_user, set_session_cookie, verify_password
 from app.components import admin_panel, base_layout, error_fragment, house_card, house_submit_form, invite_link_fragment, metadata_refresh_fragment, vote_button
 from app.config import get_settings
-from app.db import count_votes_for_house, get_db, get_house_by_external_id, get_house_by_id, get_invite_token, get_user_by_username, houses_missing_metadata, houses_ranked, insert_house, insert_user, list_users, set_invite_token, slugify, toggle_vote, update_house_missing_metadata, user_voted_house_ids
+from app.db import count_users, count_votes_for_house, get_db, get_house_by_external_id, get_house_by_id, get_invite_token, get_user_by_username, houses_missing_metadata, houses_ranked, insert_house, insert_user, list_users, set_invite_token, slugify, toggle_vote, update_house_missing_metadata, user_voted_house_ids
 from app import scraper
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ def register_routes(app: FastHTML) -> None:
         return HTMLResponse(content=str(base_layout(body, request=request, title=title)), status_code=status_code)
 
     def _register_form(
-        token: str,
+        token: str | None,
         *,
         disabled: bool,
         error_message: str | None = None,
@@ -53,35 +53,41 @@ def register_routes(app: FastHTML) -> None:
         password: str = "",
     ) -> Div:
         error_node = error_fragment(error_message) if error_message else None
+        form_children = [
+            Label("Name", fr="name", cls="form-label"),
+            Input(
+                id="name", name="name", type="text", required=True, disabled=disabled, cls="text-input",
+                hx_get="/username-preview",
+                hx_trigger="input changed delay:300ms",
+                hx_target="#username",
+                hx_swap="outerHTML",
+                value=name,
+            ),
+            Label("Username", fr="username", cls="form-label"),
+            Input(id="username", name="username", type="text", required=True, disabled=disabled, cls="text-input", value=username),
+            Label("Password", fr="password", cls="form-label"),
+            Input(id="password", name="password", type="password", required=True, disabled=disabled, cls="text-input", value=password),
+        ]
+        if token is not None:
+            form_children.append(Input(name="token", type="hidden", value=token))
+        form_children.append(Button("Create account", type="submit", disabled=disabled, cls="btn btn-primary"))
         return Div(
             error_node,
-            Form(
-                Label("Name", fr="name", cls="form-label"),
-                Input(
-                    id="name", name="name", type="text", required=True, disabled=disabled, cls="text-input",
-                    hx_get="/username-preview",
-                    hx_trigger="input changed delay:300ms",
-                    hx_target="#username",
-                    hx_swap="outerHTML",
-                    value=name,
-                ),
-                Label("Username", fr="username", cls="form-label"),
-                Input(id="username", name="username", type="text", required=True, disabled=disabled, cls="text-input", value=username),
-                Label("Password", fr="password", cls="form-label"),
-                Input(id="password", name="password", type="password", required=True, disabled=disabled, cls="text-input", value=password),
-                Input(name="token", type="hidden", value=token),
-                Button("Create account", type="submit", disabled=disabled, cls="btn btn-primary"),
-                method="post",
-                action="/register",
-                cls="auth-form",
-            ),
+            Form(*form_children, method="post", action="/register", cls="auth-form"),
             cls="auth-panel",
         )
 
-    def _login_form(*, error_message: str | None = None) -> Div:
+    def _login_form(*, error_message: str | None = None, setup_link: bool = False) -> Div:
         error_node = error_fragment(error_message) if error_message else None
+        helper = P(
+            "First time here? Create the initial admin at ",
+            A("/setup", href="/setup"),
+            ".",
+            cls="auth-hint",
+        ) if setup_link else None
         return Div(
             error_node,
+            helper,
             Form(
                 Label("Username", fr="username", cls="form-label"),
                 Input(id="username", name="username", type="text", required=True, cls="text-input"),
@@ -118,6 +124,24 @@ def register_routes(app: FastHTML) -> None:
         status_code = 200 if token_ok else 403
         return _html_response(body, request, title="Register", status_code=status_code)
 
+    @app.get("/setup")
+    async def setup_page(request: Request):
+        db = get_db()
+        if count_users(db) > 0:
+            user = current_user(request)
+            if user is None:
+                return RedirectResponse(url="/login", status_code=303)
+            if user.get("role") == "admin":
+                return RedirectResponse(url="/admin", status_code=303)
+            return RedirectResponse(url="/", status_code=303)
+
+        body = Div(
+            P("Create the first admin account.", cls="auth-hint"),
+            _register_form(None, disabled=False),
+            cls="setup-panel",
+        )
+        return _html_response(body, request, title="Setup")
+
     @app.post("/register")
     async def register(request: Request):
         form = await request.form()
@@ -127,8 +151,9 @@ def register_routes(app: FastHTML) -> None:
         password = str(form.get("password", ""))
 
         db = get_db()
+        user_count = count_users(db)
         stored_token = get_invite_token(db) or ""
-        token_ok = bool(stored_token) and compare_digest(stored_token, token)
+        token_ok = user_count == 0 or (bool(stored_token) and compare_digest(stored_token, token))
         if not token_ok:
             body = _register_form(token, disabled=True)
             return _html_response(body, request, title="Register", status_code=403)
@@ -155,7 +180,6 @@ def register_routes(app: FastHTML) -> None:
             )
             return _html_response(body, request, title="Register", status_code=409)
 
-        user_count = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         role = "admin" if user_count == 0 else "member"
 
         user_id = insert_user(
@@ -165,13 +189,16 @@ def register_routes(app: FastHTML) -> None:
             password_hash=hash_password(password),
             role=role,
         )
+        if role == "admin" and not stored_token:
+            set_invite_token(db, uuid.uuid4().hex)
         response = RedirectResponse(url="/", status_code=303)
         set_session_cookie(response, issue_token(user_id, role))
         return response
 
     @app.get("/login")
     async def login_page(request: Request):
-        return _html_response(_login_form(), request, title="Login")
+        db = get_db()
+        return _html_response(_login_form(setup_link=count_users(db) == 0), request, title="Login")
 
     @app.post("/login")
     async def login(request: Request):

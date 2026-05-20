@@ -17,7 +17,9 @@ from app.config import get_settings
 SESSION_COOKIE_NAME = "session"
 SESSION_MAX_AGE_SECONDS = 30 * 86400
 
-_password_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# bcrypt has a hard 72-byte input limit. bcrypt_sha256 keeps the bcrypt
+# storage format but hashes the password first, so long passwords work safely.
+_password_context = CryptContext(schemes=["bcrypt_sha256", "bcrypt"], deprecated="auto")
 
 
 def hash_password(plain: str) -> str:

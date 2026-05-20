@@ -107,6 +107,12 @@ def get_user_by_username(db: Database, username: str) -> dict[str, Any] | None:
     return dict(rows[0]) if rows else None
 
 
+def count_users(db: Database) -> int:
+    """Return total number of users in the database."""
+    row = list(db.query("SELECT COUNT(*) AS c FROM users"))[0]
+    return int(row["c"])
+
+
 def insert_house(
     db: Database,
     *,
