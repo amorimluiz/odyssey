@@ -3,6 +3,7 @@
   --color-primary-deep: #0457cb;
   --color-primary-soft: #0091ff;
   --color-on-primary: #ffffff;
+  --color-success: #31a24c;
   --color-ink-button: #000000;
   --color-on-ink-button: #ffffff;
   --color-canvas: #ffffff;
@@ -247,7 +248,7 @@ body.app-body {
 }
 
 .house-card-vote-btn.is-voted {
-  background: var(--color-primary-deep);
+  background: var(--color-success);
 }
 
 .house-card-link {

@@ -6,7 +6,6 @@ import re
 from starlette.requests import Request
 from starlette.testclient import TestClient
 
-from app import components
 from app.auth import hash_password, issue_token
 from app.components import base_layout, error_fragment, house_card, nav_header, vote_button
 from app.db import get_db, init_schema, insert_user, set_invite_token
@@ -64,7 +63,7 @@ def test_nav_header_admin_has_styled_admin_link(monkeypatch) -> None:
     scope = {"type": "http", "headers": [], "method": "GET", "path": "/"}
     request = Request(scope)
 
-    monkeypatch.setattr(components, "current_user", lambda _request: {"sub": 1, "role": "admin"})
+    monkeypatch.setattr("app.components.layout.current_user", lambda _request: {"sub": 1, "role": "admin"})
     html = repr(nav_header(request))
 
     assert 'href="/admin"' in html
@@ -180,12 +179,16 @@ def test_css_defines_required_design_tokens() -> None:
         "--color-primary",
         "--color-primary-deep",
         "--color-on-primary",
+        "--color-success",
         "--color-ink-button",
         "--color-on-ink-button",
         "--color-canvas",
         "--color-hairline",
     ]:
         assert token in css
+
+    assert ".house-card-vote-btn.is-voted" in css
+    assert "var(--color-success)" in css
 
 
 def test_css_has_no_hex_literals_outside_root_block() -> None:

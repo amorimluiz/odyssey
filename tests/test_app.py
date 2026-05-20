@@ -6,7 +6,6 @@ import logging
 from starlette.requests import Request
 from starlette.testclient import TestClient
 
-from app import components
 from app.components import base_layout, error_fragment, nav_header
 
 
@@ -41,7 +40,7 @@ def test_nav_header_admin_variant(monkeypatch) -> None:
     scope = {"type": "http", "headers": [], "method": "GET", "path": "/"}
     request = Request(scope)
 
-    monkeypatch.setattr(components, "current_user", lambda _request: {"sub": 1, "role": "admin"})
+    monkeypatch.setattr("app.components.layout.current_user", lambda _request: {"sub": 1, "role": "admin"})
     html = _render(nav_header(request))
 
     assert "Administração" in html
