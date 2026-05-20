@@ -9,9 +9,15 @@ from app.scraper import OGData, _parse_og_markup, fetch_og, last_fetch_meta, par
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
-EXAMPLE_URLS = Path(".compozy/tasks/group-house-voting/fixtures/example-urls.md").read_text(
-    encoding="utf-8"
+EXAMPLE_AIRBNB_URL = "https://www.airbnb.com/rooms/32311963"
+EXAMPLE_BOOKING_URL = (
+    "https://www.booking.com/hotel/br/villa-inn-economic.html"
+    "?checkin=2026-12-30&checkout=2027-01-03&group_adults=11&group_children=0"
+    "&highlighted_blocks=691479801_285025048_5_1_0%2C691479801_285025048_3_1_0%2C691479801_285025048_3_1_0"
+    "&matching_block_id=691479801_285025048_5_1_0&no_rooms=5&room1=A%2CA&room2=A%2CA&room3=A%2CA"
+    "&room4=A%2CA&room5=A%2CA%2CA&sb_price_type=total&type=total"
 )
+EXAMPLE_URLS = f"{EXAMPLE_AIRBNB_URL}\n{EXAMPLE_BOOKING_URL}"
 
 
 def _extract_urls(text: str) -> tuple[str, str]:

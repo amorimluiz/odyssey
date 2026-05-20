@@ -99,6 +99,8 @@ def test_login_page_renders_html_shell(monkeypatch, tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
+    assert response.text.startswith("<!doctype html>")
+    assert not response.text.startswith("(")
     assert "<form" in response.text
 
 

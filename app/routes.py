@@ -41,7 +41,7 @@ def register_routes(app: FastHTML) -> None:
     """Register task-specific business routes on the provided app instance."""
 
     def _html_response(body, request: Request, *, title: str, status_code: int = 200) -> HTMLResponse:
-        return HTMLResponse(content=str(base_layout(body, request=request, title=title)), status_code=status_code)
+        return HTMLResponse(content=to_xml(base_layout(body, request=request, title=title)), status_code=status_code)
 
     def _register_form(
         token: str | None,

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib
 import logging
-from pathlib import Path
 
 from starlette.testclient import TestClient
 
@@ -12,8 +11,13 @@ from app.scraper import OGData, ParsedURL
 from app.components import house_card
 
 
-EXAMPLE_URLS_PATH = Path(
-    ".compozy/tasks/group-house-voting/fixtures/example-urls.md"
+EXAMPLE_AIRBNB_URL = "https://www.airbnb.com/rooms/32311963"
+EXAMPLE_BOOKING_URL = (
+    "https://www.booking.com/hotel/br/villa-inn-economic.html"
+    "?checkin=2026-12-30&checkout=2027-01-03&group_adults=11&group_children=0"
+    "&highlighted_blocks=691479801_285025048_5_1_0%2C691479801_285025048_3_1_0%2C691479801_285025048_3_1_0"
+    "&matching_block_id=691479801_285025048_5_1_0&no_rooms=5&room1=A%2CA&room2=A%2CA&room3=A%2CA"
+    "&room4=A%2CA&room5=A%2CA%2CA&sb_price_type=total&type=total"
 )
 
 
@@ -41,9 +45,7 @@ def _login_cookie(client: TestClient, *, role: str = "member") -> int:
 
 
 def _example_urls() -> tuple[str, str]:
-    text = EXAMPLE_URLS_PATH.read_text(encoding="utf-8")
-    blocks = [part.strip() for part in text.split("```") if part.strip().startswith("http")]
-    return blocks[0], blocks[1]
+    return EXAMPLE_AIRBNB_URL, EXAMPLE_BOOKING_URL
 
 
 def test_house_card_placeholder_when_image_missing() -> None:
