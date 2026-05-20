@@ -48,6 +48,7 @@ def test_house_card_has_documented_classes() -> None:
     assert "house-card-title" in html
     assert "house-card-source" in html
     assert "house-card-image-placeholder" in html
+    assert "Abrir anúncio" in html
 
 
 def test_vote_button_toggled_class_and_aria_pressed() -> None:
@@ -56,6 +57,7 @@ def test_vote_button_toggled_class_and_aria_pressed() -> None:
     assert "house-card-vote-btn" in html
     assert "is-voted" in html
     assert 'aria-pressed="true"' in html
+    assert "Votado (4)" in html
 
 
 def test_nav_header_admin_has_styled_admin_link(monkeypatch) -> None:
@@ -76,14 +78,14 @@ def test_error_fragment_retryable_variant_class() -> None:
 
 
 def test_base_layout_includes_stylesheet_and_htmx_script() -> None:
-    html = str(base_layout("hello", title="Group House Voting"))
+    html = str(base_layout("hello", title="Votação de Casas do Grupo"))
 
     assert '<link rel="stylesheet" href="/static/style.css">' in html
     assert "htmx.min.js" in html
 
 
 def test_base_layout_includes_single_viewport_meta_tag() -> None:
-    html = str(base_layout("hello", title="Group House Voting"))
+    html = str(base_layout("hello", title="Votação de Casas do Grupo"))
 
     _assert_viewport_meta_once(html)
 

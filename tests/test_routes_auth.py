@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from starlette.testclient import TestClient
 
 from app.auth import hash_password
+from app import db as app_db
 from app.db import get_db, get_invite_token, init_schema, insert_user, set_invite_token
 
 
@@ -38,7 +39,7 @@ def test_get_invite_valid_returns_form(monkeypatch, tmp_path) -> None:
 
     assert response.status_code == 200
     _assert_html_response(response)
-    assert "Create account" in response.text
+    assert "Criar conta" in response.text
     soup = BeautifulSoup(response.text, "html.parser")
     assert len(soup.find_all("form")) == 1
     assert soup.find("input", {"name": "token", "value": "invite-ok"}) is not None
@@ -55,14 +56,14 @@ def test_get_invite_invalid_returns_403_same_shell(monkeypatch, tmp_path) -> Non
     assert other_bad.status_code == 403
     _assert_html_response(bad)
     _assert_html_response(other_bad)
-    assert "Create account" in bad.text
+    assert "Criar conta" in bad.text
     assert "disabled" in bad.text
     assert "disabled" in other_bad.text
-    assert "Create account" in other_bad.text
+    assert "Criar conta" in other_bad.text
     soup = BeautifulSoup(bad.text, "html.parser")
     alert = soup.find(attrs={"role": "alert"})
     assert alert is not None
-    assert "This invite link is invalid or has been rotated. Ask your organizer for a new one." in alert.get_text(" ", strip=True)
+    assert "Este link de convite é inválido ou foi rotacionado. Peça um novo ao organizador." in alert.get_text(" ", strip=True)
 
 
 def test_get_invite_valid_does_not_render_alert(monkeypatch, tmp_path) -> None:
@@ -88,7 +89,7 @@ def test_get_setup_renders_first_admin_form_when_no_users(monkeypatch, tmp_path)
 
     assert response.status_code == 200
     _assert_html_response(response)
-    assert "Create the first admin account." in response.text
+    assert "Crie a primeira conta de administrador." in response.text
     soup = BeautifulSoup(response.text, "html.parser")
     assert soup.find("form", {"action": "/register"}) is not None
     assert soup.find("input", {"name": "token"}) is None
@@ -116,6 +117,7 @@ def test_login_page_shows_setup_hint_when_db_is_empty(monkeypatch, tmp_path) -> 
     assert response.status_code == 200
     _assert_html_response(response)
     assert "/setup" in response.text
+    assert "administrador inicial" in response.text
 
 
 # --- /username-preview route tests ---
@@ -161,6 +163,8 @@ def test_username_preview_empty_name(monkeypatch, tmp_path) -> None:
 def test_register_persists_slugified_username_and_redirects(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
         _seed_invite("invite-ok")
+        calls: list[str] = []
+        monkeypatch.setattr(app_db, "sync_sqlite_files", lambda settings: calls.append(settings.db_path))
 
         response = client.post(
             "/register",
@@ -171,6 +175,7 @@ def test_register_persists_slugified_username_and_redirects(monkeypatch, tmp_pat
     assert response.status_code == 303
     assert response.headers["location"] == "/"
     assert "session=" in response.headers["set-cookie"].lower()
+    assert calls == [str(tmp_path / "app.db")]
     db = get_db()
     row = list(db.query("SELECT username FROM users LIMIT 1"))[0]
     assert row["username"] == "alice"
@@ -259,7 +264,7 @@ def test_register_cookie_round_trip_reaches_home(monkeypatch, tmp_path) -> None:
     assert register_response.status_code == 303
     assert home_response.status_code == 200
     _assert_html_response(home_response)
-    assert "Paste an Airbnb or Booking URL above to get started" in home_response.text
+    assert "Cole uma URL do Airbnb ou Booking acima para começar." in home_response.text
     assert "/login" not in home_response.headers.get("location", "")
 
 
@@ -274,7 +279,7 @@ def test_register_short_password_rejected_without_insert(monkeypatch, tmp_path) 
 
     assert response.status_code == 422
     _assert_html_response(response)
-    assert "Password must be at least 8 characters." in response.text
+    assert "A senha deve ter pelo menos 8 caracteres." in response.text
     db = get_db()
     assert db["users"].count == 0
 
@@ -295,7 +300,7 @@ def test_register_duplicate_username_shows_error(monkeypatch, tmp_path) -> None:
 
     assert response.status_code == 409
     _assert_html_response(response)
-    assert "This username is already taken — please choose a different one." in response.text
+    assert "Este nome de usuário já está em uso. Escolha outro." in response.text
     soup = BeautifulSoup(response.text, "html.parser")
     assert soup.find("input", {"name": "name", "value": "Two"}) is not None
     assert soup.find("input", {"name": "username", "value": "dup-user"}) is not None
@@ -377,8 +382,9 @@ def test_register_role_assignment_independent_of_admin_email(monkeypatch, tmp_pa
 
 def test_register_rotated_token_rejected(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
-        _seed_invite("old-token")
         db = get_db()
+        init_schema(db)
+        insert_user(db, name="Existing", username="existing", password_hash=hash_password("existingpass"), role="admin")
         set_invite_token(db, "new-token")
 
         response = client.post(
@@ -429,7 +435,7 @@ def test_login_cookie_round_trip_reaches_home(monkeypatch, tmp_path) -> None:
     assert login_response.status_code == 303
     assert home_response.status_code == 200
     _assert_html_response(home_response)
-    assert "Paste an Airbnb or Booking URL above to get started" in home_response.text
+    assert "Cole uma URL do Airbnb ou Booking acima para começar." in home_response.text
 
 
 def test_login_unknown_username_returns_error(monkeypatch, tmp_path) -> None:
@@ -442,7 +448,7 @@ def test_login_unknown_username_returns_error(monkeypatch, tmp_path) -> None:
 
     assert response.status_code == 401
     _assert_html_response(response)
-    assert "Invalid username or password." in response.text
+    assert "Nome de usuário ou senha inválidos." in response.text
     assert "set-cookie" not in response.headers
 
 
@@ -456,7 +462,7 @@ def test_login_wrong_password_returns_same_error(monkeypatch, tmp_path) -> None:
 
     assert response.status_code == 401
     _assert_html_response(response)
-    assert "Invalid username or password." in response.text
+    assert "Nome de usuário ou senha inválidos." in response.text
     assert "set-cookie" not in response.headers
 
 
@@ -506,7 +512,7 @@ def test_authenticated_header_logout_control_posts_to_logout(monkeypatch, tmp_pa
     logout_form = soup.find("form", {"action": "/logout"})
     assert logout_form is not None
     assert (logout_form.get("method") or "").lower() == "post"
-    assert logout_form.find("button", string="Logout") is not None
+    assert logout_form.find("button", string="Sair") is not None
 
 
 def test_login_logout_login_again_round_trip(monkeypatch, tmp_path) -> None:

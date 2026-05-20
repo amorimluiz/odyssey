@@ -31,7 +31,8 @@ def test_nav_header_logged_out_variant() -> None:
 
     html = _render(nav_header(request))
 
-    assert "Login" in html
+    assert "Entrar" in html
+    assert "Início" in html
     assert "Logout" not in html
     assert "Admin" not in html
 
@@ -43,9 +44,9 @@ def test_nav_header_admin_variant(monkeypatch) -> None:
     monkeypatch.setattr(components, "current_user", lambda _request: {"sub": 1, "role": "admin"})
     html = _render(nav_header(request))
 
-    assert "Admin" in html
-    assert "Logout" in html
-    assert "Login" not in html
+    assert "Administração" in html
+    assert "Sair" in html
+    assert "Entrar" not in html
     assert 'href="/logout"' not in html
     assert 'method="post"' in html
     assert 'action="/logout"' in html
@@ -56,7 +57,7 @@ def test_error_fragment_retryable_variant() -> None:
     html = _render(error_fragment("nope", retryable=True))
 
     assert "nope" in html
-    assert "Please retry in a few seconds." in html
+    assert "Tente novamente em alguns segundos." in html
 
 
 def test_healthz_returns_ok(monkeypatch, tmp_path) -> None:
@@ -118,6 +119,31 @@ def test_startup_calls_init_schema_once(monkeypatch, tmp_path) -> None:
         pass
 
     assert calls["count"] == 1
+
+
+def test_startup_restores_before_schema_initialization(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("SECRET_KEY", "s" * 32)
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "app.db"))
+    monkeypatch.setenv("HF_TOKEN", "hf_token")
+    monkeypatch.setenv("HF_REPO_ID", "owner/repo")
+
+    import main
+
+    order: list[str] = []
+
+    def fake_restore(_settings) -> None:
+        order.append("restore")
+
+    def fake_init_schema(_db) -> None:
+        order.append("schema")
+
+    monkeypatch.setattr(main.app_persistence, "restore_sqlite_files", fake_restore)
+    monkeypatch.setattr(main.app_db, "init_schema", fake_init_schema)
+
+    with TestClient(main.create_app()):
+        pass
+
+    assert order == ["restore", "schema"]
 
 
 

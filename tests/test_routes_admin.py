@@ -6,6 +6,7 @@ import logging
 from starlette.testclient import TestClient
 
 from app.auth import hash_password, issue_token
+from app import db as app_db
 from app.db import get_db, get_invite_token, init_schema, insert_house, insert_user, set_invite_token
 from app.scraper import OGData
 
@@ -126,6 +127,8 @@ def test_post_rotate_invite_updates_db_returns_fragment_and_invalidates_old_toke
         )
         set_invite_token(get_db(), "oldtoken")
         _set_session(client, admin_id, "admin")
+        calls: list[str] = []
+        monkeypatch.setattr(app_db, "sync_sqlite_files", lambda settings: calls.append(settings.db_path))
 
         response = client.post("/admin/rotate-invite")
         new_token = get_invite_token(get_db())
@@ -135,12 +138,13 @@ def test_post_rotate_invite_updates_db_returns_fragment_and_invalidates_old_toke
 
     assert response.status_code == 200
     assert 'id="invite-link-fragment"' in response.text
+    assert calls == [str(tmp_path / "app.db")]
     assert new_token is not None
     assert new_token != "oldtoken"
     assert f"https://trip.example.com/invite/{new_token}" in response.text
     assert old_invite.status_code == 403
     assert new_invite.status_code == 200
-    assert "Create account" in new_invite.text
+    assert "Criar conta" in new_invite.text
 
 
 def test_post_rotate_invite_logs_admin_id_without_token(monkeypatch, tmp_path, caplog) -> None:
@@ -264,11 +268,13 @@ def test_post_refresh_metadata_scans_missing_rows_and_continues_after_failure(mo
             submitted_at="2026-01-04T00:00:00+00:00",
         )
         _set_session(client, admin_id, "admin")
+        sync_calls: list[str] = []
+        monkeypatch.setattr(app_db, "sync_sqlite_files", lambda settings: sync_calls.append(settings.db_path))
 
-        calls: list[str] = []
+        fetch_calls: list[str] = []
 
         async def fake_fetch(url: str):
-            calls.append(url)
+            fetch_calls.append(url)
             if "missing-price" in url:
                 return None
             if "missing-image" in url:
@@ -284,9 +290,10 @@ def test_post_refresh_metadata_scans_missing_rows_and_continues_after_failure(mo
 
     assert response.status_code == 200
     assert 'id="metadata-refresh-fragment"' in response.text
-    assert "Scanned 3 houses. Updated 2. Failed 1." in response.text
-    assert len(calls) == 3
-    assert "https://www.airbnb.com/rooms/complete" not in calls
+    assert "Verificadas 3 casas. Atualizadas 2. Falhas: 1." in response.text
+    assert len(fetch_calls) == 3
+    assert sync_calls.count(str(tmp_path / "app.db")) == 2
+    assert "https://www.airbnb.com/rooms/complete" not in fetch_calls
     assert "event=metadata_refresh" in caplog.text
     assert "scanned=3" in caplog.text
     assert "updated=2" in caplog.text
@@ -325,6 +332,8 @@ def test_post_refresh_metadata_preserves_existing_fields_and_fills_only_missing_
             submitted_at="2026-01-02T00:00:00+00:00",
         )
         _set_session(client, admin_id, "admin")
+        sync_calls: list[str] = []
+        monkeypatch.setattr(app_db, "sync_sqlite_files", lambda settings: sync_calls.append(settings.db_path))
 
         async def fake_fetch(url: str):
             assert url == "https://www.booking.com/hotel/br/keep-price.html"
@@ -342,7 +351,8 @@ def test_post_refresh_metadata_preserves_existing_fields_and_fills_only_missing_
         response = client.post("/admin/refresh-metadata")
 
     assert response.status_code == 200
-    assert "Scanned 1 houses. Updated 1. Failed 0." in response.text
+    assert "Verificadas 1 casas. Atualizadas 1. Falhas: 0." in response.text
+    assert sync_calls == [str(tmp_path / "app.db")]
     row = list(
         db.query(
             "SELECT title, image_url, description, price FROM houses WHERE external_id = ?",
@@ -375,7 +385,7 @@ def test_admin_panel_shows_username_column_not_email(monkeypatch, tmp_path) -> N
         response = client.get("/admin")
 
     assert response.status_code == 200
-    assert "<th>Username</th>" in response.text
+    assert "<th>Nome de usuário</th>" in response.text
     assert "<th>Email</th>" not in response.text
     assert "<td>alice</td>" in response.text
     assert "<td>admin-user</td>" in response.text

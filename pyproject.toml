@@ -17,6 +17,7 @@ dependencies = [
   "bcrypt<5",
   "beautifulsoup4",
   "python-dotenv",
+  "huggingface_hub",
   "uvicorn",
 ]
 
