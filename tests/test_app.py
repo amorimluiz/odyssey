@@ -31,7 +31,8 @@ def test_nav_header_logged_out_variant() -> None:
 
     html = _render(nav_header(request))
 
-    assert "Login" in html
+    assert "Entrar" in html
+    assert "Início" in html
     assert "Logout" not in html
     assert "Admin" not in html
 
@@ -43,9 +44,9 @@ def test_nav_header_admin_variant(monkeypatch) -> None:
     monkeypatch.setattr(components, "current_user", lambda _request: {"sub": 1, "role": "admin"})
     html = _render(nav_header(request))
 
-    assert "Admin" in html
-    assert "Logout" in html
-    assert "Login" not in html
+    assert "Administração" in html
+    assert "Sair" in html
+    assert "Entrar" not in html
     assert 'href="/logout"' not in html
     assert 'method="post"' in html
     assert 'action="/logout"' in html
@@ -56,7 +57,7 @@ def test_error_fragment_retryable_variant() -> None:
     html = _render(error_fragment("nope", retryable=True))
 
     assert "nope" in html
-    assert "Please retry in a few seconds." in html
+    assert "Tente novamente em alguns segundos." in html
 
 
 def test_healthz_returns_ok(monkeypatch, tmp_path) -> None:

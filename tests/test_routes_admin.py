@@ -144,7 +144,7 @@ def test_post_rotate_invite_updates_db_returns_fragment_and_invalidates_old_toke
     assert f"https://trip.example.com/invite/{new_token}" in response.text
     assert old_invite.status_code == 403
     assert new_invite.status_code == 200
-    assert "Create account" in new_invite.text
+    assert "Criar conta" in new_invite.text
 
 
 def test_post_rotate_invite_logs_admin_id_without_token(monkeypatch, tmp_path, caplog) -> None:
@@ -290,7 +290,7 @@ def test_post_refresh_metadata_scans_missing_rows_and_continues_after_failure(mo
 
     assert response.status_code == 200
     assert 'id="metadata-refresh-fragment"' in response.text
-    assert "Scanned 3 houses. Updated 2. Failed 1." in response.text
+    assert "Verificadas 3 casas. Atualizadas 2. Falhas: 1." in response.text
     assert len(fetch_calls) == 3
     assert sync_calls.count(str(tmp_path / "app.db")) == 2
     assert "https://www.airbnb.com/rooms/complete" not in fetch_calls
@@ -351,7 +351,7 @@ def test_post_refresh_metadata_preserves_existing_fields_and_fills_only_missing_
         response = client.post("/admin/refresh-metadata")
 
     assert response.status_code == 200
-    assert "Scanned 1 houses. Updated 1. Failed 0." in response.text
+    assert "Verificadas 1 casas. Atualizadas 1. Falhas: 0." in response.text
     assert sync_calls == [str(tmp_path / "app.db")]
     row = list(
         db.query(
@@ -385,7 +385,7 @@ def test_admin_panel_shows_username_column_not_email(monkeypatch, tmp_path) -> N
         response = client.get("/admin")
 
     assert response.status_code == 200
-    assert "<th>Username</th>" in response.text
+    assert "<th>Nome de usuário</th>" in response.text
     assert "<th>Email</th>" not in response.text
     assert "<td>alice</td>" in response.text
     assert "<td>admin-user</td>" in response.text

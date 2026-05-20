@@ -281,7 +281,7 @@ def test_post_houses_og_failure_returns_502_and_logs(monkeypatch, tmp_path, capl
     assert response.status_code == 502
     assert response.headers["content-type"] == "text/html; charset=utf-8"
     assert "error-fragment retryable" in response.text
-    assert "Please retry in a few seconds." in response.text
+    assert "Tente novamente em alguns segundos." in response.text
     assert get_db()["houses"].count == 0
     assert "status=timeout" in caplog.text
     assert "url=https://www.airbnb.com/rooms/888" in caplog.text

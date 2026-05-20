@@ -54,7 +54,7 @@ def register_routes(app: FastHTML) -> None:
     ) -> Div:
         error_node = error_fragment(error_message) if error_message else None
         form_children = [
-            Label("Name", fr="name", cls="form-label"),
+            Label("Nome", fr="name", cls="form-label"),
             Input(
                 id="name", name="name", type="text", required=True, disabled=disabled, cls="text-input",
                 hx_get="/username-preview",
@@ -63,14 +63,14 @@ def register_routes(app: FastHTML) -> None:
                 hx_swap="outerHTML",
                 value=name,
             ),
-            Label("Username", fr="username", cls="form-label"),
+            Label("Nome de usuário", fr="username", cls="form-label"),
             Input(id="username", name="username", type="text", required=True, disabled=disabled, cls="text-input", value=username),
-            Label("Password", fr="password", cls="form-label"),
+            Label("Senha", fr="password", cls="form-label"),
             Input(id="password", name="password", type="password", required=True, disabled=disabled, cls="text-input", value=password),
         ]
         if token is not None:
             form_children.append(Input(name="token", type="hidden", value=token))
-        form_children.append(Button("Create account", type="submit", disabled=disabled, cls="btn btn-primary"))
+        form_children.append(Button("Criar conta", type="submit", disabled=disabled, cls="btn btn-primary"))
         return Div(
             error_node,
             Form(*form_children, method="post", action="/register", cls="auth-form"),
@@ -80,7 +80,7 @@ def register_routes(app: FastHTML) -> None:
     def _login_form(*, error_message: str | None = None, setup_link: bool = False) -> Div:
         error_node = error_fragment(error_message) if error_message else None
         helper = P(
-            "First time here? Create the initial admin at ",
+            "Primeira vez aqui? Crie o administrador inicial em ",
             A("/setup", href="/setup"),
             ".",
             cls="auth-hint",
@@ -89,11 +89,11 @@ def register_routes(app: FastHTML) -> None:
             error_node,
             helper,
             Form(
-                Label("Username", fr="username", cls="form-label"),
+                Label("Nome de usuário", fr="username", cls="form-label"),
                 Input(id="username", name="username", type="text", required=True, cls="text-input"),
-                Label("Password", fr="password", cls="form-label"),
+                Label("Senha", fr="password", cls="form-label"),
                 Input(id="password", name="password", type="password", required=True, cls="text-input"),
-                Button("Login", type="submit", cls="btn btn-primary"),
+                Button("Entrar", type="submit", cls="btn btn-primary"),
                 method="post",
                 action="/login",
                 cls="auth-form",
@@ -116,13 +116,13 @@ def register_routes(app: FastHTML) -> None:
             token,
             disabled=not token_ok,
             error_message=(
-                "This invite link is invalid or has been rotated. Ask your organizer for a new one."
+                "Este link de convite é inválido ou foi rotacionado. Peça um novo ao organizador."
                 if not token_ok
                 else None
             ),
         )
         status_code = 200 if token_ok else 403
-        return _html_response(body, request, title="Register", status_code=status_code)
+        return _html_response(body, request, title="Cadastro", status_code=status_code)
 
     @app.get("/setup")
     async def setup_page(request: Request):
@@ -136,11 +136,11 @@ def register_routes(app: FastHTML) -> None:
             return RedirectResponse(url="/", status_code=303)
 
         body = Div(
-            P("Create the first admin account.", cls="auth-hint"),
+            P("Crie a primeira conta de administrador.", cls="auth-hint"),
             _register_form(None, disabled=False),
             cls="setup-panel",
         )
-        return _html_response(body, request, title="Setup")
+        return _html_response(body, request, title="Configuração")
 
     @app.post("/register")
     async def register(request: Request):
@@ -156,29 +156,29 @@ def register_routes(app: FastHTML) -> None:
         token_ok = user_count == 0 or (bool(stored_token) and compare_digest(stored_token, token))
         if not token_ok:
             body = _register_form(token, disabled=True)
-            return _html_response(body, request, title="Register", status_code=403)
+            return _html_response(body, request, title="Cadastro", status_code=403)
 
         if len(password) < 8:
             body = _register_form(
                 token,
                 disabled=False,
-                error_message="Password must be at least 8 characters.",
+                error_message="A senha deve ter pelo menos 8 caracteres.",
                 name=name,
                 username=username,
                 password=password,
             )
-            return _html_response(body, request, title="Register", status_code=422)
+            return _html_response(body, request, title="Cadastro", status_code=422)
 
         if get_user_by_username(db, username) is not None:
             body = _register_form(
                 token,
                 disabled=False,
-                error_message="This username is already taken — please choose a different one.",
+                error_message="Este nome de usuário já está em uso. Escolha outro.",
                 name=name,
                 username=username,
                 password=password,
             )
-            return _html_response(body, request, title="Register", status_code=409)
+            return _html_response(body, request, title="Cadastro", status_code=409)
 
         role = "admin" if user_count == 0 else "member"
 
@@ -198,7 +198,7 @@ def register_routes(app: FastHTML) -> None:
     @app.get("/login")
     async def login_page(request: Request):
         db = get_db()
-        return _html_response(_login_form(setup_link=count_users(db) == 0), request, title="Login")
+        return _html_response(_login_form(setup_link=count_users(db) == 0), request, title="Entrar")
 
     @app.post("/login")
     async def login(request: Request):
@@ -207,9 +207,9 @@ def register_routes(app: FastHTML) -> None:
         password = str(form.get("password", ""))
         user = get_user_by_username(get_db(), username)
 
-        generic_error = "Invalid username or password."
+        generic_error = "Nome de usuário ou senha inválidos."
         if user is None or not verify_password(password, str(user.get("password_hash", ""))):
-            return _html_response(_login_form(error_message=generic_error), request, title="Login", status_code=401)
+            return _html_response(_login_form(error_message=generic_error), request, title="Entrar", status_code=401)
 
         response = RedirectResponse(url="/", status_code=303)
         set_session_cookie(response, issue_token(int(user["id"]), str(user["role"])))
@@ -239,7 +239,7 @@ def register_routes(app: FastHTML) -> None:
             house_submit_form(),
             Div(*list_content, id="house-list", cls="house-list"),
             request=request,
-            title="Group House Voting",
+            title="Votação de Casas do Grupo",
         )
 
     @app.post("/houses")
@@ -338,7 +338,7 @@ def register_routes(app: FastHTML) -> None:
         return base_layout(
             admin_panel(invite_url=_invite_url(request, token), members=members),
             request=request,
-            title="Admin",
+            title="Administração",
         )
 
     @app.post("/admin/rotate-invite")

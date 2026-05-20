@@ -76,14 +76,14 @@ def test_error_fragment_retryable_variant_class() -> None:
 
 
 def test_base_layout_includes_stylesheet_and_htmx_script() -> None:
-    html = str(base_layout("hello", title="Group House Voting"))
+    html = str(base_layout("hello", title="Votação de Casas do Grupo"))
 
     assert '<link rel="stylesheet" href="/static/style.css">' in html
     assert "htmx.min.js" in html
 
 
 def test_base_layout_includes_single_viewport_meta_tag() -> None:
-    html = str(base_layout("hello", title="Group House Voting"))
+    html = str(base_layout("hello", title="Votação de Casas do Grupo"))
 
     _assert_viewport_meta_once(html)
 

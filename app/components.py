@@ -23,16 +23,16 @@ HTMX_RESPONSE_HANDLING = (
 def nav_header(request: Request | None) -> Header:
     """Render top navigation links according to user auth state."""
     user = current_user(request) if request is not None else None
-    links = [A("Home", href="/")]
+    links = [A("Início", href="/")]
 
     if user is None:
-        links.append(A("Login", href="/login"))
+        links.append(A("Entrar", href="/login"))
     else:
         if user.get("role") == "admin":
-            links.append(A("Admin", href="/admin"))
+            links.append(A("Administração", href="/admin"))
         links.append(
             Form(
-                Button("Logout", type="submit", cls="nav-logout-button"),
+                Button("Sair", type="submit", cls="nav-logout-button"),
                 method="post",
                 action="/logout",
                 cls="nav-logout-form",
@@ -47,7 +47,7 @@ def nav_header(request: Request | None) -> Header:
 
 def error_fragment(message: str, retryable: bool = False) -> Div:
     """Render inline error feedback for HTMX form fragments."""
-    retry_hint = Div("Please retry in a few seconds.", cls="error-retry") if retryable else None
+    retry_hint = Div("Tente novamente em alguns segundos.", cls="error-retry") if retryable else None
     children = [Span(message, cls="error-message")]
     if retry_hint is not None:
         children.append(retry_hint)
@@ -143,7 +143,7 @@ def house_card(house: dict, *, is_voted: bool = False, highlight: bool = False, 
 def invite_link_fragment(invite_url: str) -> Div:
     """Render current invite URL plus copy and rotate controls."""
     return Div(
-        P("Current invite link"),
+        P("Link de convite atual"),
         Input(
             id="invite-link-input",
             type="text",
@@ -153,13 +153,13 @@ def invite_link_fragment(invite_url: str) -> Div:
         ),
         Div(
             Button(
-                "Copy link",
+                "Copiar link",
                 type="button",
                 onclick="copyInviteLink()",
                 cls="btn btn-secondary",
             ),
             Button(
-                "Rotate invite link",
+                "Rotacionar link de convite",
                 type="button",
                 hx_post="/admin/rotate-invite",
                 hx_target="#invite-link-fragment",
@@ -188,13 +188,13 @@ def metadata_refresh_fragment(*, scanned: int | None = None, updated: int | None
     summary = None
     if scanned is not None and updated is not None and failed is not None:
         summary = P(
-            f"Scanned {scanned} houses. Updated {updated}. Failed {failed}.",
+            f"Verificadas {scanned} casas. Atualizadas {updated}. Falhas: {failed}.",
             cls="admin-refresh-summary",
         )
 
     return Div(
         Button(
-            "Refresh missing metadata",
+            "Atualizar metadados ausentes",
             type="button",
             hx_post="/admin/refresh-metadata",
             hx_target="#metadata-refresh-fragment",
@@ -221,9 +221,9 @@ def admin_panel(*, invite_url: str, members: list[dict]) -> Div:
     return Div(
         invite_link_fragment(invite_url),
         metadata_refresh_fragment(),
-        H2("Members", cls="section-title"),
+        H2("Membros", cls="section-title"),
         Table(
-            Thead(Tr(Th("Name"), Th("Username"), Th("Joined"))),
+            Thead(Tr(Th("Nome"), Th("Nome de usuário"), Th("Data de entrada"))),
             Tbody(*rows),
             cls="members-table",
         ),
@@ -233,7 +233,7 @@ def admin_panel(*, invite_url: str, members: list[dict]) -> Div:
 
 def base_layout(*content, request: Request | None = None, title: str | None = None) -> Html:
     """Render the base HTML shell with shared scripts and navigation."""
-    page_title = title or "Group House Voting"
+    page_title = title or "Votação de Casas do Grupo"
     return Html(
         Head(
             Title(page_title),
