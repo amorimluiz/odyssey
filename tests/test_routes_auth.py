@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from starlette.testclient import TestClient
 
 from app.auth import hash_password
+from app import db as app_db
 from app.db import get_db, get_invite_token, init_schema, insert_user, set_invite_token
 
 
@@ -161,6 +162,8 @@ def test_username_preview_empty_name(monkeypatch, tmp_path) -> None:
 def test_register_persists_slugified_username_and_redirects(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
         _seed_invite("invite-ok")
+        calls: list[str] = []
+        monkeypatch.setattr(app_db, "sync_sqlite_files", lambda settings: calls.append(settings.db_path))
 
         response = client.post(
             "/register",
@@ -171,6 +174,7 @@ def test_register_persists_slugified_username_and_redirects(monkeypatch, tmp_pat
     assert response.status_code == 303
     assert response.headers["location"] == "/"
     assert "session=" in response.headers["set-cookie"].lower()
+    assert calls == [str(tmp_path / "app.db")]
     db = get_db()
     row = list(db.query("SELECT username FROM users LIMIT 1"))[0]
     assert row["username"] == "alice"
@@ -377,8 +381,9 @@ def test_register_role_assignment_independent_of_admin_email(monkeypatch, tmp_pa
 
 def test_register_rotated_token_rejected(monkeypatch, tmp_path) -> None:
     with _build_client(monkeypatch, tmp_path) as client:
-        _seed_invite("old-token")
         db = get_db()
+        init_schema(db)
+        insert_user(db, name="Existing", username="existing", password_hash=hash_password("existingpass"), role="admin")
         set_invite_token(db, "new-token")
 
         response = client.post(

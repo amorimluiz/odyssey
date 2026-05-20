@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 from sqlite_utils import Database
 
+from app import db as app_db
 from app.db import (
     get_house_by_external_id,
     get_invite_token,
@@ -345,6 +346,43 @@ def test_file_backed_persistence_and_constraints(tmp_path) -> None:
             title="Dup",
             submitted_by=uid,
         )
+
+
+def test_write_helpers_trigger_remote_sync_after_commits(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("SECRET_KEY", "s" * 32)
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "app.db"))
+
+    calls: list[str] = []
+    monkeypatch.setattr(app_db, "sync_sqlite_files", lambda settings: calls.append(settings.db_path))
+
+    db = Database(memory=True)
+    init_schema(db)
+
+    user_id = insert_user(db, name="User", username="user", password_hash="hash")
+    house_id = insert_house(
+        db,
+        source="airbnb",
+        external_id="sync-me",
+        url="https://airbnb.com/rooms/sync-me",
+        title="Sync House",
+        submitted_by=user_id,
+        submitted_at="2026-01-05T00:00:00+00:00",
+    )
+    assert toggle_vote(db, user_id, house_id) is True
+    assert toggle_vote(db, user_id, house_id) is False
+    set_invite_token(db, "sync-token")
+    assert update_house_missing_metadata(
+        db,
+        house_id,
+        OGData(
+            title="Updated",
+            image_url="https://example.com/updated.jpg",
+            description="Updated description",
+            price="$200",
+        ),
+    ) is True
+
+    assert calls == [str(tmp_path / "app.db")] * 6
 
 def test_get_db_enables_wal_and_foreign_keys(monkeypatch) -> None:
     from app.config import get_settings

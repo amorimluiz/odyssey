@@ -7,6 +7,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from app.auth import hash_password, issue_token
+from app import db as app_db
 from app.components import vote_button
 from app.db import count_votes_for_house, get_db, init_schema, insert_house, insert_user
 
@@ -73,6 +74,8 @@ def test_vote_toggle_authenticated_vote_then_unvote(monkeypatch, tmp_path) -> No
         user_id = _make_user(client, "member")
         _set_session(client, user_id)
         house_id = _seed_house(user_id)
+        calls: list[str] = []
+        monkeypatch.setattr(app_db, "sync_sqlite_files", lambda settings: calls.append(settings.db_path))
 
         first = client.post(f"/houses/{house_id}/vote")
         second = client.post(f"/houses/{house_id}/vote")
@@ -85,6 +88,7 @@ def test_vote_toggle_authenticated_vote_then_unvote(monkeypatch, tmp_path) -> No
     assert 'aria-pressed="false"' in second.text
     assert "Vote (0)" in second.text
 
+    assert calls == [str(tmp_path / "app.db"), str(tmp_path / "app.db")]
     assert count_votes_for_house(get_db(), house_id) == 0
 
 

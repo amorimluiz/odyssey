@@ -7,6 +7,7 @@ from pathlib import Path
 from starlette.testclient import TestClient
 
 from app.auth import hash_password, issue_token
+from app import db as app_db
 from app.db import get_db, init_schema, insert_house, insert_user
 from app.scraper import OGData, ParsedURL
 from app.components import house_card
@@ -147,12 +148,14 @@ def test_post_houses_success_inserts_and_returns_card(monkeypatch, tmp_path) -> 
     with _build_client(monkeypatch, tmp_path) as client:
         user_id = _login_cookie(client)
         import app.routes as routes_module
+        calls: list[str] = []
 
         async def fake_fetch(_url: str):
             return OGData(title="Fetched title", image_url=None, description="Desc", price=None)
 
         monkeypatch.setattr(routes_module.scraper, "fetch_og", fake_fetch)
         monkeypatch.setattr(routes_module.scraper, "last_fetch_meta", lambda: {"status": 200, "elapsed_ms": 11})
+        monkeypatch.setattr(app_db, "sync_sqlite_files", lambda settings: calls.append(settings.db_path))
 
         response = client.post(
             "/houses",
@@ -162,6 +165,7 @@ def test_post_houses_success_inserts_and_returns_card(monkeypatch, tmp_path) -> 
     assert response.status_code == 200
     assert "house-" in response.text
     assert "Open listing" in response.text
+    assert calls == [str(tmp_path / "app.db")]
     rows = list(get_db().query("SELECT submitted_by, source, external_id FROM houses"))
     assert len(rows) == 1
     assert int(rows[0]["submitted_by"]) == user_id
