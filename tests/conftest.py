@@ -15,6 +15,8 @@ def isolate_environment(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("DB_PATH", raising=False)
     monkeypatch.delenv("SECRET_KEY", raising=False)
     monkeypatch.delenv("BASE_URL", raising=False)
+    monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
+    monkeypatch.delenv("TURSO_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("APP_ENV", raising=False)
     monkeypatch.delenv("ENV", raising=False)
     get_settings.cache_clear()

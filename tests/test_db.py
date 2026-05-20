@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 from sqlite_utils import Database
 
-from app import db as app_db
 from app.db import (
+    count_users,
+    count_votes_for_house,
     get_house_by_external_id,
     get_invite_token,
     get_user_by_username,
@@ -24,6 +27,74 @@ from app.errors import DuplicateHouseError
 from app.scraper import OGData
 
 
+class _LibSQLLikeConnection:
+    """Small DB-API proxy that mimics the libSQL connection shape we need to validate."""
+
+    def __init__(self) -> None:
+        self._conn = sqlite3.connect(":memory:")
+        self._conn.row_factory = sqlite3.Row
+        self.executed_sql: list[str] = []
+        self.executescript_sql: list[str] = []
+        self.create_function_calls: list[tuple[str, int]] = []
+        self.commit_calls = 0
+        self.rollback_calls = 0
+        self.sync_calls = 0
+
+    def __enter__(self):
+        self._conn.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return self._conn.__exit__(exc_type, exc, tb)
+
+    def execute(self, *args, **kwargs):
+        if args:
+            self.executed_sql.append(str(args[0]))
+        return self._conn.execute(*args, **kwargs)
+
+    def executescript(self, *args, **kwargs):
+        if args:
+            self.executescript_sql.append(str(args[0]))
+        return self._conn.executescript(*args, **kwargs)
+
+    def cursor(self, *args, **kwargs):
+        return self._conn.cursor(*args, **kwargs)
+
+    def commit(self):
+        self.commit_calls += 1
+        return self._conn.commit()
+
+    def rollback(self):
+        self.rollback_calls += 1
+        return self._conn.rollback()
+
+    def create_function(self, *args, **kwargs):
+        if args:
+            self.create_function_calls.append((str(args[0]), int(args[1])))
+        return self._conn.create_function(*args, **kwargs)
+
+    def sync(self):
+        self.sync_calls += 1
+
+    def close(self):
+        return self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def _libsql_like_db() -> Database:
+    return Database(_LibSQLLikeConnection())
+
+
+def _fake_libsql_module(connection: _LibSQLLikeConnection, calls: list[tuple[str, str | None]]) -> SimpleNamespace:
+    def connect(url: str, auth_token: str | None = None):
+        calls.append((url, auth_token))
+        return connection
+
+    return SimpleNamespace(connect=connect)
+
+
 def test_init_schema_creates_tables_and_is_idempotent() -> None:
     db = Database(memory=True)
     init_schema(db)
@@ -33,6 +104,120 @@ def test_init_schema_creates_tables_and_is_idempotent() -> None:
     assert db["users"].exists()
     assert db["houses"].exists()
     assert db["votes"].exists()
+
+
+def test_sqlite_utils_database_wraps_libsql_like_connection_without_adapter() -> None:
+    db = _libsql_like_db()
+
+    db.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL
+        );
+        INSERT INTO users(username) VALUES ('alice');
+        """
+    )
+    db.execute("INSERT INTO users(username) VALUES (?)", ["bob"])
+
+    rows = list(db.query("SELECT id, username FROM users ORDER BY id"))
+    assert [row["username"] for row in rows] == ["alice", "bob"]
+    assert rows[0]["username"] == "alice"
+
+
+def test_sqlite_utils_table_helpers_work_on_libsql_like_connection() -> None:
+    db = _libsql_like_db()
+    init_schema(db)
+
+    user_id = insert_user(db, name="A", username="user-a", password_hash="hash")
+    house_id = insert_house(
+        db,
+        source="airbnb",
+        external_id="abc1",
+        url="https://airbnb.com/rooms/abc1",
+        title="House A",
+        submitted_by=user_id,
+    )
+
+    db["users"].create_index(["username"], unique=True, if_not_exists=True, index_name="users_username")
+    assert count_users(db) == 1
+    assert count_votes_for_house(db, house_id) == 0
+
+    db["votes"].insert({"user_id": user_id, "house_id": house_id, "voted_at": "2026-01-01T00:00:00+00:00"})
+    db.conn.commit()
+    db["votes"].delete_where("user_id = ? AND house_id = ?", [user_id, house_id])
+    db.conn.commit()
+    assert count_votes_for_house(db, house_id) == 0
+
+
+def test_sqlite_utils_connection_commit_and_rollback_work_on_libsql_like_connection() -> None:
+    db = _libsql_like_db()
+    init_schema(db)
+    insert_user(db, name="A", username="user-a", password_hash="hash")
+    db.conn.commit()
+
+    db.execute("BEGIN")
+    db.execute("INSERT INTO users (name, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)", [
+        "B",
+        "user-b",
+        "hash",
+        "member",
+        "2026-01-01T00:00:00+00:00",
+    ])
+    db.conn.rollback()
+
+    assert count_users(db) == 1
+
+
+def test_init_schema_and_helpers_work_with_libsql_like_connection_without_route_changes() -> None:
+    db = _libsql_like_db()
+    init_schema(db)
+
+    user_id = insert_user(db, name="A", username="user-a", password_hash="hash")
+    house_id = insert_house(
+        db,
+        source="airbnb",
+        external_id="abc1",
+        url="https://airbnb.com/rooms/abc1",
+        title="House A",
+        submitted_by=user_id,
+        submitted_at="2026-01-01T00:00:00+00:00",
+    )
+
+    assert get_user_by_username(db, "USER-A") is not None
+    assert toggle_vote(db, user_id, house_id) is True
+    assert count_votes_for_house(db, house_id) == 1
+
+
+def test_insert_user_returns_persisted_row_id_and_lowercase_username() -> None:
+    db = Database(memory=True)
+    init_schema(db)
+
+    user_id = insert_user(db, name="João Silva", username="JoaoSilva", password_hash="hash")
+
+    row = list(db.query("SELECT id, username FROM users WHERE id = ?", [user_id]))[0]
+    assert int(row["id"]) == user_id
+    assert row["username"] == "joaosilva"
+
+
+def test_insert_house_returns_persisted_row_id() -> None:
+    db = Database(memory=True)
+    init_schema(db)
+    user_id = insert_user(db, name="User", username="user", password_hash="hash")
+
+    house_id = insert_house(
+        db,
+        source="airbnb",
+        external_id="abc1",
+        url="https://airbnb.com/rooms/abc1",
+        title="House A",
+        submitted_by=user_id,
+    )
+
+    row = list(db.query("SELECT id, source, external_id FROM houses WHERE id = ?", [house_id]))[0]
+    assert int(row["id"]) == house_id
+    assert row["source"] == "airbnb"
+    assert row["external_id"] == "abc1"
 
 
 def _seed_user_house(db: Database) -> tuple[int, int]:
@@ -347,22 +532,47 @@ def test_file_backed_persistence_and_constraints(tmp_path) -> None:
             submitted_by=uid,
         )
 
-def test_get_db_enables_wal_and_foreign_keys(monkeypatch) -> None:
-    from app.config import get_settings
-    from app.db import get_db
+def test_write_helpers_persist_in_production(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("SECRET_KEY", "s" * 32)
+    monkeypatch.setenv("APP_ENV", "production")
+    db_path = tmp_path / "production.db"
+    monkeypatch.setenv("DB_PATH", str(db_path))
+    monkeypatch.setenv("TURSO_DATABASE_URL", "libsql://db.turso.io")
+    monkeypatch.setenv("TURSO_AUTH_TOKEN", "turso-token")
 
-    monkeypatch.setenv("SECRET_KEY", "x" * 32)
-    monkeypatch.setenv("DB_PATH", ":memory:")
-    get_settings.cache_clear()
+    db = Database(str(db_path))
+    init_schema(db)
 
-    db = get_db()
-    mode = list(db.query("PRAGMA journal_mode"))[0]["journal_mode"]
-    fk = list(db.query("PRAGMA foreign_keys"))[0]["foreign_keys"]
+    user_id = insert_user(db, name="User", username="user", password_hash="hash")
+    house_id = insert_house(
+        db,
+        source="airbnb",
+        external_id="prod-sync-me",
+        url="https://airbnb.com/rooms/prod-sync-me",
+        title="Prod House",
+        submitted_by=user_id,
+        submitted_at="2026-01-05T00:00:00+00:00",
+    )
 
-    assert str(mode).lower() in {"memory", "wal"}
-    assert fk == 1
+    assert toggle_vote(db, user_id, house_id) is True
+    assert set_invite_token(db, "prod-sync-token") is None
+    assert update_house_missing_metadata(
+        db,
+        house_id,
+        OGData(
+            title="Updated",
+            image_url="https://example.com/updated.jpg",
+            description="Updated description",
+            price="$200",
+        ),
+    ) is True
 
-def test_get_db_file_backed_reports_wal(monkeypatch, tmp_path) -> None:
+    assert list(Database(str(db_path)).query("SELECT COUNT(*) AS c FROM users"))[0]["c"] == 1
+    assert list(Database(str(db_path)).query("SELECT COUNT(*) AS c FROM votes"))[0]["c"] == 1
+    assert list(Database(str(db_path)).query("SELECT value FROM settings WHERE key = ?", ["invite_token"]))[0]["value"] == "prod-sync-token"
+
+
+def test_get_db_uses_configured_db_path_and_local_wal(monkeypatch, tmp_path) -> None:
     from app.config import get_settings
     from app.db import get_db
 
@@ -372,8 +582,41 @@ def test_get_db_file_backed_reports_wal(monkeypatch, tmp_path) -> None:
     get_settings.cache_clear()
 
     db = get_db()
+    location = list(db.query("PRAGMA database_list"))[0]["file"]
     mode = list(db.query("PRAGMA journal_mode"))[0]["journal_mode"]
+    fk = list(db.query("PRAGMA foreign_keys"))[0]["foreign_keys"]
+
+    assert location == str(db_path)
     assert str(mode).lower() == "wal"
+    assert fk == 1
+
+
+def test_get_db_uses_libsql_connect_in_production(monkeypatch, caplog, tmp_path) -> None:
+    from app.config import get_settings
+    from app.db import get_db
+    import app.db as app_db
+
+    db_path = tmp_path / "production.db"
+    fake_conn = _LibSQLLikeConnection()
+    calls: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(app_db, "libsql", _fake_libsql_module(fake_conn, calls))
+    monkeypatch.setenv("SECRET_KEY", "x" * 32)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("DB_PATH", str(db_path))
+    monkeypatch.setenv("TURSO_DATABASE_URL", "libsql://db.turso.io?secret=redacted")
+    monkeypatch.setenv("TURSO_AUTH_TOKEN", "turso-token")
+    get_settings.cache_clear()
+
+    caplog.set_level(logging.INFO)
+    db = get_db()
+
+    assert calls == [("libsql://db.turso.io?secret=redacted", "turso-token")]
+    assert fake_conn.executed_sql.count("PRAGMA journal_mode=WAL") == 0
+    assert fake_conn.sync_calls == 0
+    assert fake_conn.create_function_calls == [("slugify", 1)]
+    assert list(db.query("SELECT 1 AS c"))[0]["c"] == 1
+    assert any("event=db_backend_selected backend=libsql app_env=production" in msg for msg in caplog.messages)
+    assert all("turso-token" not in msg for msg in caplog.messages)
 
 
 # --- slugify unit tests ---

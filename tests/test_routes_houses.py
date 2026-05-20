@@ -165,8 +165,9 @@ def test_post_houses_success_inserts_and_returns_card(monkeypatch, tmp_path) -> 
     assert response.status_code == 200
     assert "house-" in response.text
     assert "Abrir anúncio" in response.text
-    rows = list(get_db().query("SELECT submitted_by, source, external_id FROM houses"))
+    rows = list(get_db().query("SELECT id, submitted_by, source, external_id FROM houses"))
     assert len(rows) == 1
+    assert f'id="house-{rows[0]["id"]}"' in response.text
     assert int(rows[0]["submitted_by"]) == user_id
     assert rows[0]["source"] == "airbnb"
     assert rows[0]["external_id"] == "123456"

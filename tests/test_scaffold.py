@@ -28,6 +28,8 @@ def test_get_settings_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(result, Settings)
     assert result.db_path == "./tmp.db"
     assert result.secret_key == "s" * 32
+    assert result.app_env == "development"
+    assert result.is_production is False
 
 
 def test_get_settings_requires_secret_key() -> None:
@@ -45,10 +47,21 @@ def test_settings_has_no_admin_email_attribute(monkeypatch: pytest.MonkeyPatch) 
 
 def test_python_import_app_subprocess() -> None:
     result = subprocess.run(
-        [sys.executable, "-c", "import app"],
+        [
+            sys.executable,
+            "-c",
+            (
+                "import os; "
+                "os.environ['SECRET_KEY'] = 's' * 32; "
+                "from app.config import Settings, get_settings; "
+                "settings = get_settings(); "
+                "print(Settings.__name__, settings.app_env)"
+            ),
+        ],
         capture_output=True,
         text=True,
         check=False,
     )
 
     assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "Settings development"

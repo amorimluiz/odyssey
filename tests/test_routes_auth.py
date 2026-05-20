@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import importlib
+import sqlite3
 
 from bs4 import BeautifulSoup
 from starlette.testclient import TestClient
+from sqlite_utils import Database
 
-from app.auth import hash_password
+from app.auth import decode_token, hash_password
 from app.db import get_db, get_invite_token, init_schema, insert_user, set_invite_token
 
 
@@ -173,8 +175,55 @@ def test_register_persists_slugified_username_and_redirects(monkeypatch, tmp_pat
     assert response.headers["location"] == "/"
     assert "session=" in response.headers["set-cookie"].lower()
     db = get_db()
-    row = list(db.query("SELECT username FROM users LIMIT 1"))[0]
+    row = list(db.query("SELECT id, username FROM users LIMIT 1"))[0]
     assert row["username"] == "alice"
+    session_cookie = response.cookies.get("session")
+    assert session_cookie is not None
+    payload = decode_token(session_cookie)
+    assert payload is not None
+    assert payload["sub"] == str(row["id"])
+
+
+def test_register_in_production_uses_libsql_connection(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "production.db"
+    monkeypatch.setenv("SECRET_KEY", "s" * 32)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("DB_PATH", str(db_path))
+    monkeypatch.setenv("TURSO_DATABASE_URL", "libsql://db.turso.io")
+    monkeypatch.setenv("TURSO_AUTH_TOKEN", "turso-token")
+
+    import main
+    importlib.reload(main)
+
+    connect_calls: list[tuple[str, str | None]] = []
+
+    def fake_connect(url: str, auth_token: str | None = None):
+        connect_calls.append((url, auth_token))
+        return sqlite3.connect(str(db_path), check_same_thread=False)
+
+    monkeypatch.setattr(
+        main.app_db,
+        "libsql",
+        type("FakeLibSQL", (), {"connect": staticmethod(fake_connect)})(),
+    )
+
+    with TestClient(main.create_app()) as client:
+        db = get_db()
+        init_schema(db)
+        set_invite_token(db, "invite-ok")
+
+        response = client.post(
+            "/register",
+            data={"name": "Prod", "username": "prod-user", "password": "supersecure", "token": "invite-ok"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
+    assert connect_calls
+    assert connect_calls[0] == ("libsql://db.turso.io", "turso-token")
+    rows = list(Database(str(db_path)).query("SELECT username FROM users LIMIT 1"))
+    assert rows[0]["username"] == "prod-user"
 
 
 def test_register_accepts_long_passwords(monkeypatch, tmp_path) -> None:

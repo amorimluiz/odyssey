@@ -2,20 +2,49 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 import unicodedata
 from datetime import UTC, datetime
 from typing import Any
 
+try:
+    import libsql  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - exercised indirectly in tests via monkeypatching
+    libsql = None  # type: ignore[assignment]
+
 from sqlite_utils import Database
 
 from app.config import get_settings
 from app.errors import DuplicateHouseError
 
+logger = logging.getLogger(__name__)
+
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _register_slugify(db: Database) -> None:
+    create_function = getattr(db.conn, "create_function", None)
+    if not callable(create_function):
+        return
+    try:
+        create_function("slugify", 1, slugify)
+    except Exception:  # pragma: no cover - only reached on backends that expose but reject UDFs
+        return
+
+
+def _configure_local_sqlite(db: Database) -> None:
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA foreign_keys=ON")
+    _register_slugify(db)
+
+
+def _configure_shared_sqlite(db: Database) -> None:
+    db.execute("PRAGMA foreign_keys=ON")
+    _register_slugify(db)
 
 
 def slugify(text: str) -> str:
@@ -26,11 +55,20 @@ def slugify(text: str) -> str:
 
 
 def get_db() -> Database:
-    """Open configured SQLite database and enable required pragmas."""
-    db = Database(get_settings().db_path)
-    db.execute("PRAGMA journal_mode=WAL")
-    db.execute("PRAGMA foreign_keys=ON")
-    db.conn.create_function("slugify", 1, slugify)
+    """Open the configured database backend and enable supported shared behavior."""
+    settings = get_settings()
+    if settings.is_production:
+        if libsql is None:
+            raise RuntimeError("libsql module is required when APP_ENV=production")
+        conn = libsql.connect(settings.turso_database_url, auth_token=settings.turso_auth_token)
+        db = Database(conn)
+        _configure_shared_sqlite(db)
+        backend = "libsql"
+    else:
+        db = Database(settings.db_path)
+        _configure_local_sqlite(db)
+        backend = "sqlite"
+    logger.info("event=db_backend_selected backend=%s app_env=%s", backend, settings.app_env)
     return db
 
 
@@ -88,16 +126,22 @@ def insert_user(
     created_at: str | None = None,
 ) -> int:
     """Insert a user and return the new user id."""
-    db["users"].insert(
-        {
-            "name": name,
-            "username": username.lower(),
-            "password_hash": password_hash,
-            "role": role,
-            "created_at": created_at or _utc_now_iso(),
-        },
+    row = db.conn.execute(
+        """
+        INSERT INTO users (name, username, password_hash, role, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        RETURNING id
+        """,
+        [
+            name,
+            username.lower(),
+            password_hash,
+            role,
+            created_at or _utc_now_iso(),
+        ],
     )
-    row_id = db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    row_id = row.fetchone()[0]
+    db.conn.commit()
     return int(row_id)
 
 
@@ -128,25 +172,41 @@ def insert_house(
 ) -> int:
     """Insert house row and map unique collision to DuplicateHouseError."""
     try:
-        db["houses"].insert(
-            {
-                "source": source,
-                "external_id": external_id,
-                "url": url,
-                "title": title,
-                "image_url": image_url,
-                "description": description,
-                "price": price,
-                "submitted_by": submitted_by,
-                "submitted_at": submitted_at or _utc_now_iso(),
-            },
+        row = db.conn.execute(
+            """
+            INSERT INTO houses (
+                source,
+                external_id,
+                url,
+                title,
+                image_url,
+                description,
+                price,
+                submitted_by,
+                submitted_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
+            """,
+            [
+                source,
+                external_id,
+                url,
+                title,
+                image_url,
+                description,
+                price,
+                submitted_by,
+                submitted_at or _utc_now_iso(),
+            ],
         )
+        row_id = row.fetchone()[0]
     except sqlite3.IntegrityError as exc:
         if "houses.source, houses.external_id" in str(exc) or "UNIQUE constraint failed: houses.source, houses.external_id" in str(exc):
             raise DuplicateHouseError("House already exists for source/external_id") from exc
         raise
 
-    row_id = db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    db.conn.commit()
     return int(row_id)
 
 

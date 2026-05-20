@@ -25,6 +25,7 @@ The visible app UI and user-facing error copy are in Brazilian Portuguese.
 |---|---|
 | Web framework | [FastHTML](https://fastht.ml) + [Starlette](https://www.starlette.io) |
 | Database | SQLite via [sqlite-utils](https://sqlite-utils.datasette.io) |
+| Production persistence | Direct Turso/libSQL via [libsql](https://github.com/tursodatabase/libsql-client-py) |
 | Scraping | [httpx](https://www.python-httpx.org) + [BeautifulSoup4](https://www.crummy.com/software/BeautifulSoup/) |
 | Auth | JWT (PyJWT) + bcrypt (passlib) |
 | Server | [Uvicorn](https://www.uvicorn.org) |
@@ -44,9 +45,12 @@ cp .env.example .env
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `SECRET_KEY` | **Yes** | — | Secret used to sign JWTs. Use at least 32 random bytes. |
+| `APP_ENV` | No | `development` | Environment selector. Use `production` to require Turso/libSQL settings and direct remote persistence. |
 | `DB_PATH` | No | `./app.db` | Path to the SQLite database file. |
 | `ADMIN_EMAIL` | No | — | Email that receives the `admin` role on first registration. |
 | `BASE_URL` | No | — | Public base URL used to build invite links (e.g. `https://myapp.example.com`). Falls back to the request host when omitted. |
+| `TURSO_DATABASE_URL` | No, but required when `APP_ENV=production` | — | Turso/libSQL database URL used for direct production connections. |
+| `TURSO_AUTH_TOKEN` | No, but required when `APP_ENV=production` | — | Turso auth token used with the production database URL. |
 
 Generate a safe `SECRET_KEY`:
 
@@ -76,7 +80,17 @@ The app will be available at `http://localhost:8000`.
 
 ### Deploy Notes
 
-Provide a persistent `DB_PATH` on platforms that do not keep the filesystem between deploys. SQLite persistence is local-only and depends on the configured database file remaining available.
+Development and tests run against local SQLite by default.
+
+Production must set `APP_ENV=production` and provide both Turso settings. The app fails fast during startup if either value is missing.
+
+```bash
+APP_ENV=production
+TURSO_DATABASE_URL=libsql://<your-database>.turso.io
+TURSO_AUTH_TOKEN=<your-turso-auth-token>
+```
+
+Production connects directly to Turso/libSQL and commits writes remotely. It does not rely on a local SQLite file.
 
 ### Run tests
 
@@ -84,7 +98,7 @@ Provide a persistent `DB_PATH` on platforms that do not keep the filesystem betw
 pytest
 ```
 
-Coverage is enforced at 80%. The test suite mocks Hugging Face Hub calls, so it does not require a real token.
+Coverage is enforced at 80%. The test suite mocks libSQL connections, so it does not require a live Turso database or real Turso credentials.
 
 To see the HTML report:
 

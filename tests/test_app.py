@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import sqlite3
 
 from starlette.requests import Request
 from starlette.testclient import TestClient
@@ -128,6 +129,41 @@ def test_startup_calls_init_schema_once(monkeypatch, tmp_path) -> None:
     assert db["houses"].exists()
     assert db["votes"].exists()
 
+
+def test_startup_uses_libsql_in_production(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("SECRET_KEY", "s" * 32)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "production.db"))
+    monkeypatch.setenv("TURSO_DATABASE_URL", "libsql://db.turso.io")
+    monkeypatch.setenv("TURSO_AUTH_TOKEN", "turso-token")
+
+    import main
+    importlib.reload(main)
+
+    schema_calls: list[str] = []
+    fake_conn = sqlite3.connect(":memory:", check_same_thread=False)
+
+    def fake_connect(url: str, auth_token: str | None = None):
+        assert url == "libsql://db.turso.io"
+        assert auth_token == "turso-token"
+        return fake_conn
+
+    def fake_init_schema(_db) -> None:
+        schema_calls.append("schema")
+
+    monkeypatch.setattr(main.app_db, "init_schema", fake_init_schema)
+    monkeypatch.setattr(
+        main.app_db,
+        "libsql",
+        type("FakeLibSQL", (), {"connect": staticmethod(fake_connect)})(),
+    )
+
+    with TestClient(main.create_app()):
+        pass
+
+    assert schema_calls == ["schema"]
+
+
 def test_startup_is_idempotent_for_same_db_path(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("SECRET_KEY", "s" * 32)
     db_path = str(tmp_path / "shared.db")
@@ -140,6 +176,61 @@ def test_startup_is_idempotent_for_same_db_path(monkeypatch, tmp_path) -> None:
         pass
     with TestClient(main.create_app()):
         pass
+
+
+def test_startup_uses_local_sqlite_backend(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("SECRET_KEY", "s" * 32)
+    db_path = tmp_path / "local.db"
+    monkeypatch.setenv("DB_PATH", str(db_path))
+
+    import main
+
+    observed: dict[str, object] = {}
+
+    def fake_init_schema(db) -> None:
+        observed["location"] = list(db.query("PRAGMA database_list"))[0]["file"]
+        observed["mode"] = list(db.query("PRAGMA journal_mode"))[0]["journal_mode"]
+
+    monkeypatch.setattr(main.app_db, "init_schema", fake_init_schema)
+    importlib.reload(main)
+    with TestClient(main.create_app()):
+        pass
+
+    assert observed["location"] == str(db_path)
+    assert str(observed["mode"]).lower() == "wal"
+
+
+def test_startup_uses_production_libsql_backend(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("SECRET_KEY", "s" * 32)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "production.db"))
+    monkeypatch.setenv("TURSO_DATABASE_URL", "libsql://db.turso.io")
+    monkeypatch.setenv("TURSO_AUTH_TOKEN", "turso-token")
+
+    import main
+
+    calls: list[tuple[str, str | None]] = []
+
+    def fake_connect(url: str, auth_token: str | None = None):
+        calls.append((url, auth_token))
+        return sqlite3.connect(":memory:", check_same_thread=False)
+
+    monkeypatch.setattr(main.app_db, "libsql", type("FakeLibSQL", (), {"connect": staticmethod(fake_connect)})())
+
+    observed: dict[str, object] = {}
+
+    def fake_init_schema(db) -> None:
+        observed["fk"] = list(db.query("PRAGMA foreign_keys"))[0]["foreign_keys"]
+        observed["mode"] = list(db.query("PRAGMA journal_mode"))[0]["journal_mode"]
+
+    monkeypatch.setattr(main.app_db, "init_schema", fake_init_schema)
+    importlib.reload(main)
+    with TestClient(main.create_app()):
+        pass
+
+    assert calls == [("libsql://db.turso.io", "turso-token")]
+    assert observed["fk"] == 1
+    assert observed["mode"] != "wal"
 
 
 def test_request_logging_contains_required_fields(monkeypatch, caplog, tmp_path) -> None:
